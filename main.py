@@ -19,7 +19,22 @@ dp = Dispatcher()
 
 # Har bir foydalanuvchi uchun alohida izolatsiya qilingan xotira muhiti
 CHAT_MEMORY = {}
+from datetime import date
 
+DAILY_LIMIT = 20  # bitta foydalanuvchi kuniga nechta xabar yubora oladi (o'zgartirishingiz mumkin)
+USER_USAGE = {}
+
+def check_and_update_limit(user_id):
+    today = date.today().isoformat()
+    usage = USER_USAGE.get(user_id)
+    if usage is None or usage["date"] != today:
+        USER_USAGE[user_id] = {"date": today, "count": 1}
+        return True
+    if usage["count"] >= DAILY_LIMIT:
+        return False
+    usage["count"] += 1
+    return True
+    
 SYSTEM_INSTRUCTION = (
     "Sizning ismingiz Qadam. Siz foydalanuvchining shaxsiy, xolis va chuqur tahliliy psixologik yordamchisiz. "
     "Muloqotda moslanuvchan bo'lish uchun har bir foydalanuvchining kognitiv holati va hissiy energiyasini mukammal aks ettiring. "
@@ -56,7 +71,10 @@ async def handle_text_message(message: types.Message):
             CHAT_MEMORY[user_id] = []
         await message.reply("Suhbat tarixi tozalandi.")
         return
-
+if not check_and_update_limit(user_id):
+        await message.reply("📊 Sizning bugungi limitingiz tugadi. Limit ertaga tiklanadi.")
+        return
+    
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
     
     history = get_history_context(user_id)
