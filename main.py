@@ -4,10 +4,10 @@ import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums.chat_action import ChatAction
 from google import genai
+from google.genai import errors
 from google.genai import types as genai_types
 from aiohttp import web
 
-# Set up clean logging to print full error stack traces to Render
 logging.basicConfig(level=logging.INFO)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -84,7 +84,7 @@ async def handle_photo_message(message: types.Message):
         
         await process_gemini_request(message, user_id, contents, f"[Sent a Photo]: {user_query}")
     except Exception:
-        logging.exception("Photo download/processing internal failure:")
+        logging.exception("Photo processing internal failure:")
         await message.reply("⚠️ Rasmni qayta ishlashda xatolik yuz berdi.")
 
 # --- 3. HANDLE VOICE MESSAGES (VOICE-TO-TEXT) ---
@@ -133,34 +133,48 @@ async def handle_document_message(message: types.Message):
         logging.exception("Document processing internal failure:")
         await message.reply("⚠️ Hujjatni yuklashda xatolik yuz berdi.")
 
-# --- MAIN ENGINE PROCESSING WITH DETAILED LIVE ERROR TRACING ---
+# --- MAIN ENGINE PROCESSING WITH RATE LIMIT PROTECTION ---
 async def process_gemini_request(message, user_id, contents, memory_query):
-    try:
-        # Generate configuration using explicit SDK classes to avoid verification blocks
-        generation_config = genai_types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
-        )
-        
-        response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',  # Production-ready model mapping
-            contents=contents,
-            config=generation_config
-        )
-        
-        if response and response.text:
-            reply_text = response.text
-            save_to_memory(user_id, "User", memory_query)
-            save_to_memory(user_id, "AI", reply_text)
-            await message.reply(reply_text, parse_mode="Markdown")
-            return
-        else:
-            raise ValueError("Gemini returned an empty response text payload.")
+    max_retries = 3
+    retry_delay = 3
 
-    except Exception:
-        # CRITICAL: This will print the full, unedited traceback crash log into Render!
-        logging.exception(f"CRITICAL CRASH inside process_gemini_request for user {user_id}:")
-        await message.reply("⚠️ Tizim xatoligi yuz berdi.")
+    generation_config = genai_types.GenerateContentConfig(
+        system_instruction=SYSTEM_INSTRUCTION,
+        tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
+    )
+
+    for attempt in range(max_retries):
+        try:
+            response = ai_client.models.generate_content(
+                model='gemini-1.5-flash',  # High quota production model
+                contents=contents,
+                config=generation_config
+            )
+            
+            if response and response.text:
+                reply_text = response.text
+                save_to_memory(user_id, "User", memory_query)
+                save_to_memory(user_id, "AI", reply_text)
+                await message.reply(reply_text, parse_mode="Markdown")
+                return
+            else:
+                raise ValueError("Empty text block returned from Gemini API.")
+
+        except errors.ClientError as ce:
+            # Check specifically for rate limits or quota overages
+            if ce.code == 429 or "quota" in str(ce).lower():
+                logging.warning(f"Rate limit triggered. Retrying in {retry_delay}s... (Attempt {attempt+1}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+                continue
+            logging.exception("Gemini Client Error:")
+            await message.reply("⚠️ Tizim xatoligi yuz berdi.")
+            return
+        except Exception:
+            logging.exception("General processing failure inside request:")
+            await asyncio.sleep(retry_delay)
+
+    await message.reply("⏳ Hozirda server band. Iltimos, bir daqiqadan so'ng qayta yozing.")
 
 async def handle_ping(request):
     return web.Response(text="Bot is running")
