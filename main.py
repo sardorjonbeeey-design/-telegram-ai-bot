@@ -145,14 +145,18 @@ async def process_gemini_request(message, user_id, contents, memory_query):
 
     for attempt in range(max_retries):
         try:
-            response = ai_client.models.generate_content(
-                model='gemini-1.5-flash',
-                contents=contents,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
-                )
-            )
+            from google import genai
+from google.genai import types  # Ensure this import is at the top of your file
+
+# Inside your generate_content configuration:
+response = ai_client.models.generate_content(
+    model='gemini-1.5-flash',
+    contents=contents,
+    config=types.GenerateContentConfig(
+        system_instruction=SYSTEM_INSTRUCTION,
+        tools=[types.Tool(google_search=types.GoogleSearch())]
+    )
+)
             
             if response and response.text:
                 reply_text = response.text
