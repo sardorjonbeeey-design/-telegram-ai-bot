@@ -15,38 +15,28 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- IN-MEMORY HISTORY STORAGE ---
-# This saves history in Python memory (RAM) instead of a database file
-CHAT_MEMORY = {}
-
-def save_message(user_id, role, content):
-    if user_id not in CHAT_MEMORY:
-        CHAT_MEMORY[user_id] = []
-    
-    CHAT_MEMORY[user_id].append({"role": role, "content": content})
-    
-    # Keep only the last 30 messages to avoid high memory usage
-    if len(CHAT_MEMORY[user_id]) > 30:
-        CHAT_MEMORY[user_id] = CHAT_MEMORY[user_id][-30:]
-
-def get_chat_history(user_id):
-    if user_id not in CHAT_MEMORY:
-        return ""
-    
-    history_text = ""
-    for msg in CHAT_MEMORY[user_id]:
-        history_text += f"{msg['role']}: {msg['content']}\n"
-    return history_text
-# ---------------------------------
+# --- OFFICIAL SDK CHAT MEMORY STORAGE ---
+# This tracks active chat sessions for each user automatically
+ACTIVE_CHATS = {}
 
 SYSTEM_INSTRUCTION = (
     "You are a friendly Telegram chat assistant. Keep all responses brief, direct, "
     "and under 3 sentences long. Avoid formatting long bullet points or essays. "
     "Be friendly but honest. Your response style should be identical to Claude's. "
-    "Only claim to remember or know information if it exists explicitly in the Conversation History provided. "
+    "Only claim to remember or know information if it exists explicitly in the chat history. "
     "If you have the exact info in history, answer 'yes'. If you have no info, be direct and say 'no' or that you don't know. "
     "Do not imagine or fabricate things unless specifically asked to create an image or a story."
 )
+
+def get_or_create_chat(user_id):
+    # If this user doesn't have an active session, start an official Gemini Chat session
+    if user_id not in ACTIVE_CHATS:
+        ACTIVE_CHATS[user_id] = ai_client.chats.create(
+            model="gemini-2.5-flash",
+            config={'system_instruction': SYSTEM_INSTRUCTION}
+        )
+    return ACTIVE_CHATS[user_id]
+# ----------------------------------------
 
 @dp.message(F.text)
 async def handle_message(message: types.Message):
@@ -57,34 +47,19 @@ async def handle_message(message: types.Message):
         await message.reply("Assalomu alaykum! Senga qanday yordam bera olaman?")
         return
 
-    # 1. Save the user's message to memory
-    save_message(user_id, "User", user_query)
-
-    # 2. Pull the history text
-    history = get_chat_history(user_id)
-
-    # 3. Format the context prompt
-    full_prompt = f"""Conversation History:
-{history}
-
-Current User Message: {user_query}"""
+    # 1. Get this user's official chat session
+    user_chat_session = get_or_create_chat(user_id)
 
     max_retries = 3
     retry_delay = 5
 
     for attempt in range(max_retries):
         try:
-            response = ai_client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=full_prompt,
-                config={'system_instruction': SYSTEM_INSTRUCTION}
-            )
-            reply_text = response.text
+            # 2. Send the message straight to the session thread
+            # Use asyncio.to_thread to keep the sync API call from freezing the async bot loop
+            response = await asyncio.to_thread(user_chat_session.send_message, user_query)
             
-            # 4. Save AI's response to memory
-            save_message(user_id, "AI", reply_text)
-            
-            await message.reply(reply_text)
+            await message.reply(response.text)
             return
 
         except errors.APIError as api_err:
@@ -95,7 +70,7 @@ Current User Message: {user_query}"""
                 await message.reply("⚠️ Xatolik yuz berdi. Birozdan so'ng urinib ko'ring.")
                 return
         except Exception as e:
-            logging.error(f"API Error occurred: {e}")
+            logging.error(f"Gemini API Session Error: {e}")
             await message.reply("⚠️ Xatolik yuz berdi.")
             return
 
