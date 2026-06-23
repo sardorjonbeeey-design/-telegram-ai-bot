@@ -2,12 +2,12 @@ import os
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.enums.chat_action import ChatAction  # Clean, type-safe status actions
+from aiogram.enums.chat_action import ChatAction
 from google import genai
-from google.genai import errors
 from google.genai import types as genai_types
 from aiohttp import web
 
+# Set up clean logging to print full error stack traces to Render
 logging.basicConfig(level=logging.INFO)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -17,7 +17,6 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- GLOBAL IN-MEMORY CHAT STORAGE ---
 CHAT_MEMORY = {}
 
 SYSTEM_INSTRUCTION = (
@@ -60,7 +59,6 @@ async def handle_text_message(message: types.Message):
         await message.reply("Clear! Suhbat tarixi tozalandi. Yangi mavzuni boshlashimiz mumkin. 🧹")
         return
 
-    # Trigger instant text feedback
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
     history = get_history_context(user_id)
     full_prompt = f"Conversation History:\n{history}\nCurrent User Message: {user_query}"
@@ -73,7 +71,6 @@ async def handle_photo_message(message: types.Message):
     user_id = message.chat.id
     user_query = message.caption.strip() if message.caption else "Analyze this image and describe what you see."
     
-    # Trigger image-processing specific status feedback
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.UPLOAD_PHOTO)
     photo = message.photo[-1]
     
@@ -86,15 +83,14 @@ async def handle_photo_message(message: types.Message):
         contents = [f"Conversation History:\n{history}\nUser Request about image: {user_query}", image_part]
         
         await process_gemini_request(message, user_id, contents, f"[Sent a Photo]: {user_query}")
-    except Exception as e:
-        logging.error(f"Photo processing failed: {e}")
+    except Exception:
+        logging.exception("Photo download/processing internal failure:")
         await message.reply("⚠️ Rasmni qayta ishlashda xatolik yuz berdi.")
 
 # --- 3. HANDLE VOICE MESSAGES (VOICE-TO-TEXT) ---
 @dp.message(F.voice)
 async def handle_voice_message(message: types.Message):
     user_id = message.chat.id
-    # Voice takes a second to process, show active typing signal right away
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
     voice = message.voice
 
@@ -107,8 +103,8 @@ async def handle_voice_message(message: types.Message):
         contents = [f"Conversation History:\n{history}\nListen to this voice message and respond to it directly:", audio_part]
         
         await process_gemini_request(message, user_id, contents, "[Sent a Voice Note]")
-    except Exception as e:
-        logging.error(f"Voice note processing failed: {e}")
+    except Exception:
+        logging.exception("Voice processing internal failure:")
         await message.reply("⚠️ Ovozli xabarni o'qishda xatolik yuz berdi.")
 
 # --- 4. HANDLE DOCUMENTS (PDF & TXT) ---
@@ -123,7 +119,6 @@ async def handle_document_message(message: types.Message):
         await message.reply("⚠️ Iltimos, faqat PDF yoki matnli (.txt) hujjat yuboring.")
         return
 
-    # Trigger visual feedback while reading the document structure
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
     try:
         file_info = await bot.get_file(doc.file_id)
@@ -134,52 +129,38 @@ async def handle_document_message(message: types.Message):
         contents = [f"Conversation History:\n{history}\nUser query about this file: {user_query}", doc_part]
         
         await process_gemini_request(message, user_id, contents, f"[Sent a Document]: {user_query}")
-    except Exception as e:
-        logging.error(f"Document processing failed: {e}")
+    except Exception:
+        logging.exception("Document processing internal failure:")
         await message.reply("⚠️ Hujjatni yuklashda xatolik yuz berdi.")
 
-# --- COMMON GEMINI ENGINE PROCESSING WITH LIVE GOOGLE SEARCH ---
+# --- MAIN ENGINE PROCESSING WITH DETAILED LIVE ERROR TRACING ---
 async def process_gemini_request(message, user_id, contents, memory_query):
-    max_retries = 3
-    retry_delay = 3
+    try:
+        # Generate configuration using explicit SDK classes to avoid verification blocks
+        generation_config = genai_types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTION,
+            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
+        )
+        
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',  # Production-ready model mapping
+            contents=contents,
+            config=generation_config
+        )
+        
+        if response and response.text:
+            reply_text = response.text
+            save_to_memory(user_id, "User", memory_query)
+            save_to_memory(user_id, "AI", reply_text)
+            await message.reply(reply_text, parse_mode="Markdown")
+            return
+        else:
+            raise ValueError("Gemini returned an empty response text payload.")
 
-    for attempt in range(max_retries):
-        try:
-            from google import genai
-from google.genai import types  # Ensure this import is at the top of your file
-
-# Inside your generate_content configuration:
-response = ai_client.models.generate_content(
-    model='gemini-1.5-flash',
-    contents=contents,
-    config=types.GenerateContentConfig(
-        system_instruction=SYSTEM_INSTRUCTION,
-        tools=[types.Tool(google_search=types.GoogleSearch())]
-    )
-)
-            
-            if response and response.text:
-                reply_text = response.text
-                save_to_memory(user_id, "User", memory_query)
-                save_to_memory(user_id, "AI", reply_text)
-                await message.reply(reply_text, parse_mode="Markdown")
-                return
-            else:
-                raise Exception("Empty response payload received")
-
-        except errors.APIError as api_err:
-            logging.error(f"Gemini API Error (Attempt {attempt+1}): {api_err}")
-            if api_err.code == 429:
-                await asyncio.sleep(retry_delay)
-                retry_delay *= 2
-            else:
-                await message.reply("⚠️ Tizim xatoligi yuz berdi.")
-                return
-        except Exception as e:
-            logging.error(f"General Loop Error (Attempt {attempt+1}): {e}")
-            await asyncio.sleep(retry_delay)
-
-    await message.reply("⏳ Hozirda server band. Iltimos, bir daqiqadan so'ng qayta yozing.")
+    except Exception:
+        # CRITICAL: This will print the full, unedited traceback crash log into Render!
+        logging.exception(f"CRITICAL CRASH inside process_gemini_request for user {user_id}:")
+        await message.reply("⚠️ Tizim xatoligi yuz berdi.")
 
 async def handle_ping(request):
     return web.Response(text="Bot is running")
