@@ -3,8 +3,7 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums.chat_action import ChatAction
-from google import genai
-from google.genai import types as genai_types
+import google.generativeai as genai
 from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
@@ -12,9 +11,11 @@ logging.basicConfig(level=logging.INFO)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# Gemini konfiguratsiyasi
+genai.configure(api_key=GEMINI_API_KEY)
+
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Har bir foydalanuvchi uchun alohida izolatsiya qilingan xotira muhiti
 CHAT_MEMORY = {}
@@ -23,9 +24,7 @@ SYSTEM_INSTRUCTION = (
     "Sizning ismingiz Qadam. Siz foydalanuvchining shaxsiy, xolis va chuqur tahliliy psixologik yordamchisiz. "
     "Muloqotda moslanuvchan bo'lish uchun har bir foydalanuvchining kognitiv holati va hissiy energiyasini mukammal aks ettiring. "
     "Muloqot uslubingiz o'ta toza, to'g'ridan-to'g'ri va aniq bo'lishi shart (Claude uslubida). "
-    "Murakkab ma'lumotlar tahlili, hujjatlar yoki kod taqdim etilayotgan holatlardan tashqari, javoblaringizni 3-4 gapdan oshirmang. "
-    "Agar so'ralgan ma'lumot yoki statistika sizda mutlaqo ma'lum bo'lmasa, aniq qilib: 'Menda ushbu ma'lumotga kirish huquqi yo'q.' deb javob bering. "
-    "Agar ma'lumot mavjud bo'lsa, uni to'g'ridan-to'g'ri taqdim eting. Ortiqcha gaplar, taxminlar va mubolag'alardan foydalanmang."
+    "Javoblaringizni maksimal 3-4 gapdan oshirmang. Ortiqcha gaplar, taxminlar va mubolag'alardan foydalanmang."
 )
 
 def save_to_memory(user_id, role, content):
@@ -43,59 +42,13 @@ def get_history_context(user_id):
         context += f"{msg['role']}: {msg['content']}\n"
     return context
 
-async def process_multimedia_message(message: types.Message, file_id: str, prompt_text: str):
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-    
-    file_info = await bot.get_file(file_id)
-    file_path = file_info.file_path
-    
-    file_bytes = await bot.download_file(file_path)
-    file_data = file_bytes.read()
-    
-    ext = file_path.split('.')[-1].lower()
-    mime_types = {
-        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
-        'oga': 'audio/ogg', 'ogg': 'audio/ogg', 'mp3': 'audio/mp3',
-        'pdf': 'application/pdf',
-        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    }
-    mime_type = mime_types.get(ext, 'application/octet-stream')
-
-    history = get_history_context(message.chat.id)
-    user_context = prompt_text if prompt_text else "Ushbu biriktirilgan faylni tizim formati bo'yicha tahlil qiling."
-    full_prompt = f"History:\n{history}\nUser Request: {user_context}"
-
-    try:
-        response = ai_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=[
-                genai_types.Part.from_bytes(data=file_data, mime_type=mime_type),
-                full_prompt
-            ],
-            config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION
-            )
-        )
-        
-        if response and response.text:
-            reply_text = response.text
-            save_to_memory(message.chat.id, "User", f"[Fayl yuborildi: .{ext}] {prompt_text if prompt_text else ''}")
-            save_to_memory(message.chat.id, "AI", reply_text)
-            await message.reply(reply_text, parse_mode="Markdown")
-        else:
-            await message.reply("Menda ushbu ma'lumotga kirish huquqi yo'q.")
-    except Exception:
-        logging.exception("Gemini Media Pipeline Exception:")
-        await message.reply("⚠️ Xizmat vaqtincha imkonsiz. Iltimos, birozdan keyin qayta urinib ko'ring.")
-
 @dp.message(F.text)
 async def handle_text_message(message: types.Message):
     user_query = message.text.strip()
     user_id = message.chat.id
 
     if user_query == "/start":
-        await message.reply("Qadam faol. Matn, rasm, ovozli xabar yoki hujjat (PDF, Docx, Xlsx) yuborishingiz mumkin.")
+        await message.reply("Qadam faol. Shaxsiy yordamchi rejimida ishga tushirildi. Savolingizni yozishingiz mumkin.")
         return
         
     if user_query == "/clear":
@@ -105,16 +58,18 @@ async def handle_text_message(message: types.Message):
         return
 
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+    
     history = get_history_context(user_id)
-    full_prompt = f"History:\n{history}\nUser: {user_query}"
+    full_prompt = f"{SYSTEM_INSTRUCTION}\n\nSuhbat tarixi:\n{history}\nFoydalanuvchi: {user_query}\nJavob:"
 
     try:
-        response = ai_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=full_prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION
-            )
+        loop = asyncio.get_event_loop()
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Asinxron oqim to'silib qolmasligi uchun executor'da bajaramiz
+        response = await loop.run_in_executor(
+            None, 
+            lambda: model.generate_content(full_prompt)
         )
         
         if response and response.text:
@@ -123,25 +78,12 @@ async def handle_text_message(message: types.Message):
             save_to_memory(user_id, "AI", reply_text)
             await message.reply(reply_text, parse_mode="Markdown")
         else:
-            await message.reply("Menda ushbu ma'lumotga kirish huquqi yo'q.")
-    except Exception:
-        logging.exception("Gemini Text Pipeline Exception:")
-        await message.reply("⚠️ Xizmat vaqtincha imkonsiz. Iltimos, birozdan keyin qayta urinib ko'ring.")
-
-@dp.message(F.photo)
-async def handle_photo(message: types.Message):
-    photo_id = message.photo[-1].file_id
-    await process_multimedia_message(message, photo_id, message.caption)
-
-@dp.message(F.voice | F.audio)
-async def handle_audio(message: types.Message):
-    file_id = message.voice.file_id if message.voice else message.audio.file_id
-    await process_multimedia_message(message, file_id, message.caption)
-
-@dp.message(F.document)
-async def handle_document(message: types.Message):
-    file_id = message.document.file_id
-    await process_multimedia_message(message, file_id, message.caption)
+            await message.reply("⚠️ Sun'iy intellektdan bo'sh xabar qaytdi.")
+            
+    except Exception as e:
+        logging.error(f"Gemini Pipeline Error: {str(e)}")
+        # Xatolik kodini to'g'ridan-to'g'ri Telegramga chiqaradi, srazu sababini ko'ramiz
+        await message.reply(f"⚠️ Xatolik yuz berdi:\n`{str(e)}`", parse_mode="Markdown")
 
 async def handle_ping(request):
     return web.Response(text="Bot running")
@@ -155,7 +97,7 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     
-    logging.info("Starting Telegram polling mechanics...")
+    logging.info("Telegram polling boshlanmoqda...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
