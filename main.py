@@ -102,4 +102,4 @@ Current User Message: {user_query}"""
             response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
                 contents=full_prompt,
-                config={'system_instruction': SYSTEM_
+                config={'system_instruction': SYSTEM_INSTRUCTION}
