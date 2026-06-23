@@ -23,7 +23,7 @@ dp = Dispatcher()
 CHAT_MEMORY = {}
 
 # Kunlik limit sozlamalari
-DAILY_LIMIT = 20  # bitta foydalanuvchi kuniga nechta xabar yubora oladi
+# bitta foydalanuvchi kuniga nechta xabar yubora oladi
 USER_USAGE = {}
 
 SYSTEM_INSTRUCTION = (
