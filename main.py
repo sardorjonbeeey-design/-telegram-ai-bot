@@ -18,13 +18,12 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 CHAT_MEMORY = {}
 
-# Claude uslubidagi, aniq va ortiqcha gaplarsiz o'zbekcha tizim ko'rsatmasi
 SYSTEM_INSTRUCTION = (
     "Sizning ismingiz Qadam. Siz xolis, chuqur tahliliy va qat'iy psixologik yordamchisiz. "
     "Muloqotda moslanuvchan bo'lish uchun foydalanuvchining kognitiv holati va hissiy energiyasini aks ettiring. "
     "Muloqot uslubingiz o'ta toza, to'g'ridan-to'g'ri va aniq bo'lishi shart (Klode (Claude) uslubida). "
     "Murakkab ma'lumotlar tahlili yoki kod taqdim etilayotgan holatlardan tashqari, javoblaringizni 3-4 gapdan oshirmang. "
-    "Agar so'ralgan ma'lumot yoki statistika sizda mutlaqo mavjud bo'lmasa, aniq qilib: 'Menda ushbu ma'lumotga kirish huquqi yo'q.' deb javob bering. "
+    "Agar so'ralgan ma'lumot yoki statistika sizda mutlaqo ma'lum bo'lmasa, aniq qilib: 'Menda ushbu ma'lumotga kirish huquqi yo'q.' deb javob bering. "
     "Agar ma'lumot mavjud bo'lsa, uni to'g'ridan-to'g'ri taqdim eting. Ortiqcha gaplar, taxminlar va mubolag'alardan foydalanmang."
 )
 
@@ -44,7 +43,6 @@ def get_history_context(user_id):
     return context
 
 async def process_multimedia_message(message: types.Message, file_id: str, prompt_text: str):
-    """Telegramdan fayllarni yuklab oladi va to'g'ridan-to'g'ri Gemini API ga uzatadi."""
     await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     
     file_info = await bot.get_file(file_id)
@@ -69,7 +67,7 @@ async def process_multimedia_message(message: types.Message, file_id: str, promp
 
     try:
         response = ai_client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash',
             contents=[
                 genai_types.Part.from_bytes(data=file_data, mime_type=mime_type),
                 full_prompt
@@ -112,7 +110,7 @@ async def handle_text_message(message: types.Message):
 
     try:
         response = ai_client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash',
             contents=full_prompt,
             config=genai_types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
