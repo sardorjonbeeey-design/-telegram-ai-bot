@@ -30,7 +30,7 @@ SYSTEM_INSTRUCTION = (
 def get_or_create_chat(user_id):
     if user_id not in ACTIVE_CHATS:
         ACTIVE_CHATS[user_id] = ai_client.chats.create(
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             config={'system_instruction': SYSTEM_INSTRUCTION}
         )
     return ACTIVE_CHATS[user_id]
