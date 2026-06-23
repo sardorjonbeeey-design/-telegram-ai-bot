@@ -7,9 +7,8 @@ from google.genai import errors
 
 logging.basicConfig(level=logging.INFO)
 
-# Change these strings to your actual keys!
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_FROM_BOTFATHER"
-GEMINI_API_KEY = "YOUR_GOOGLE_AI_STUDIO_API_KEY"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
