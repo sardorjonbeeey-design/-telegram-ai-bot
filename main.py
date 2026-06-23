@@ -146,11 +146,11 @@ async def process_gemini_request(message, user_id, contents, memory_query):
     for attempt in range(max_retries):
         try:
             response = ai_client.models.generate_content(
-                model='gemini-1.5-flash',  # FIXED: Pointing directly to production identifier
+                model='gemini-1.5-flash',
                 contents=contents,
                 config=genai_types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
-                    tools=[{"google_search": {}}]
+                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
                 )
             )
             
