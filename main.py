@@ -146,7 +146,7 @@ async def process_gemini_request(message, user_id, contents, memory_query):
     for attempt in range(max_retries):
         try:
             response = ai_client.models.generate_content(
-                model='gemini-1.5-flash-002',
+                model='gemini-1.5-flash',  # FIXED: Pointing directly to production identifier
                 contents=contents,
                 config=genai_types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
@@ -158,7 +158,6 @@ async def process_gemini_request(message, user_id, contents, memory_query):
                 reply_text = response.text
                 save_to_memory(user_id, "User", memory_query)
                 save_to_memory(user_id, "AI", reply_text)
-                # Parse markdown correctly using standard markdown compatibility
                 await message.reply(reply_text, parse_mode="Markdown")
                 return
             else:
