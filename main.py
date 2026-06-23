@@ -16,13 +16,14 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
+# Har bir foydalanuvchi uchun alohida izolatsiya qilingan xotira muhiti
 CHAT_MEMORY = {}
 
 SYSTEM_INSTRUCTION = (
-    "Sizning ismingiz Qadam. Siz xolis, chuqur tahliliy va qat'iy psixologik yordamchisiz. "
-    "Muloqotda moslanuvchan bo'lish uchun foydalanuvchining kognitiv holati va hissiy energiyasini aks ettiring. "
-    "Muloqot uslubingiz o'ta toza, to'g'ridan-to'g'ri va aniq bo'lishi shart (Klode (Claude) uslubida). "
-    "Murakkab ma'lumotlar tahlili yoki kod taqdim etilayotgan holatlardan tashqari, javoblaringizni 3-4 gapdan oshirmang. "
+    "Sizning ismingiz Qadam. Siz foydalanuvchining shaxsiy, xolis va chuqur tahliliy psixologik yordamchisiz. "
+    "Muloqotda moslanuvchan bo'lish uchun har bir foydalanuvchining kognitiv holati va hissiy energiyasini mukammal aks ettiring. "
+    "Muloqot uslubingiz o'ta toza, to'g'ridan-to'g'ri va aniq bo'lishi shart (Claude uslubida). "
+    "Murakkab ma'lumotlar tahlili, hujjatlar yoki kod taqdim etilayotgan holatlardan tashqari, javoblaringizni 3-4 gapdan oshirmang. "
     "Agar so'ralgan ma'lumot yoki statistika sizda mutlaqo ma'lum bo'lmasa, aniq qilib: 'Menda ushbu ma'lumotga kirish huquqi yo'q.' deb javob bering. "
     "Agar ma'lumot mavjud bo'lsa, uni to'g'ridan-to'g'ri taqdim eting. Ortiqcha gaplar, taxminlar va mubolag'alardan foydalanmang."
 )
@@ -31,8 +32,8 @@ def save_to_memory(user_id, role, content):
     if user_id not in CHAT_MEMORY:
         CHAT_MEMORY[user_id] = []
     CHAT_MEMORY[user_id].append({"role": role, "content": content})
-    if len(CHAT_MEMORY[user_id]) > 14:
-        CHAT_MEMORY[user_id] = CHAT_MEMORY[user_id][-14:]
+    if len(CHAT_MEMORY[user_id]) > 10:
+        CHAT_MEMORY[user_id] = CHAT_MEMORY[user_id][-10:]
 
 def get_history_context(user_id):
     if user_id not in CHAT_MEMORY:
@@ -73,8 +74,7 @@ async def process_multimedia_message(message: types.Message, file_id: str, promp
                 full_prompt
             ],
             config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
+                system_instruction=SYSTEM_INSTRUCTION
             )
         )
         
@@ -113,8 +113,7 @@ async def handle_text_message(message: types.Message):
             model='gemini-2.0-flash',
             contents=full_prompt,
             config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
+                system_instruction=SYSTEM_INSTRUCTION
             )
         )
         
