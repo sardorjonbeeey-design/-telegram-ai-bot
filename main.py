@@ -103,3 +103,24 @@ Current User Message: {user_query}"""
                 model='gemini-2.5-flash',
                 contents=full_prompt,
                 config={'system_instruction': SYSTEM_INSTRUCTION}
+            )
+            reply_text = response.text
+            
+            # 4. Save Gemini's response to history before sending
+            await save_message(user_id, "AI", reply_text)
+            
+            await message.reply(reply_text)
+            return
+
+        except errors.APIError as api_err:
+            if api_err.code == 429:
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                await message.reply("⚠️ Xatolik yuz berdi. Birozdan so'ng urinib ko'ring.")
+                return
+        except Exception:
+            await message.reply("⚠️ Xatolik yuz berdi.")
+            return
+
+    await message.reply("⏳ Hozirda server band. Iltimos, bir daqiqadan so'ng qayta yozing.")
