@@ -1,7 +1,6 @@
 import os
 import asyncio
 import logging
-import sqlite3
 from aiogram import Bot, Dispatcher, types, F
 from google import genai
 from google.genai import errors
@@ -16,53 +15,29 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- DATABASE SETUP (MEMORY LEVEL 1) ---
-def init_db():
-    conn = sqlite3.connect('chatbot.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS chat_history (
-            user_id INTEGER,
-            role TEXT,
-            content TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
+# --- IN-MEMORY HISTORY STORAGE ---
+# This saves history in Python memory (RAM) instead of a database file
+CHAT_MEMORY = {}
 
-# Run the database initialization right away
-init_db()
+def save_message(user_id, role, content):
+    if user_id not in CHAT_MEMORY:
+        CHAT_MEMORY[user_id] = []
+    
+    CHAT_MEMORY[user_id].append({"role": role, "content": content})
+    
+    # Keep only the last 30 messages to avoid high memory usage
+    if len(CHAT_MEMORY[user_id]) > 30:
+        CHAT_MEMORY[user_id] = CHAT_MEMORY[user_id][-30:]
 
-async def save_message(user_id, role, content):
-    def _save():
-        conn = sqlite3.connect('chatbot.db')
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)', (user_id, role, content))
-        conn.commit()
-        conn.close()
-    await asyncio.to_thread(_save)
-
-async def get_chat_history(user_id, limit=30):
-    def _get():
-        conn = sqlite3.connect('chatbot.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT role, content FROM (
-                SELECT role, content, timestamp FROM chat_history 
-                WHERE user_id = ? 
-                ORDER BY timestamp DESC LIMIT ?
-            ) ORDER BY timestamp ASC
-        ''', (user_id, limit))
-        rows = cursor.fetchall()
-        conn.close()
-        
-        history_text = ""
-        for role, content in rows:
-            history_text += f"{role}: {content}\n"
-        return history_text
-    return await asyncio.to_thread(_get)
-# ----------------------------------------
+def get_chat_history(user_id):
+    if user_id not in CHAT_MEMORY:
+        return ""
+    
+    history_text = ""
+    for msg in CHAT_MEMORY[user_id]:
+        history_text += f"{msg['role']}: {msg['content']}\n"
+    return history_text
+# ---------------------------------
 
 SYSTEM_INSTRUCTION = (
     "You are a friendly Telegram chat assistant. Keep all responses brief, direct, "
@@ -82,13 +57,13 @@ async def handle_message(message: types.Message):
         await message.reply("Assalomu alaykum! Senga qanday yordam bera olaman?")
         return
 
-    # 1. Save the user's message to history
-    await save_message(user_id, "User", user_query)
+    # 1. Save the user's message to memory
+    save_message(user_id, "User", user_query)
 
-    # 2. Pull the last 30 messages for this user
-    history = await get_chat_history(user_id, limit=30)
+    # 2. Pull the history text
+    history = get_chat_history(user_id)
 
-    # 3. Format the final context prompt for Gemini
+    # 3. Format the context prompt
     full_prompt = f"""Conversation History:
 {history}
 
@@ -106,8 +81,8 @@ Current User Message: {user_query}"""
             )
             reply_text = response.text
             
-            # 4. Save Gemini's response to history before sending
-            await save_message(user_id, "AI", reply_text)
+            # 4. Save AI's response to memory
+            save_message(user_id, "AI", reply_text)
             
             await message.reply(reply_text)
             return
@@ -119,7 +94,8 @@ Current User Message: {user_query}"""
             else:
                 await message.reply("⚠️ Xatolik yuz berdi. Birozdan so'ng urinib ko'ring.")
                 return
-        except Exception:
+        except Exception as e:
+            logging.error(f"API Error occurred: {e}")
             await message.reply("⚠️ Xatolik yuz berdi.")
             return
 
