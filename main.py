@@ -18,14 +18,14 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 CHAT_MEMORY = {}
 
-# Exact Claude-style system prompt ensuring precise, professional, and adaptive tone
+# Claude uslubidagi, aniq va ortiqcha gaplarsiz o'zbekcha tizim ko'rsatmasi
 SYSTEM_INSTRUCTION = (
-    "You are Qadam, an objective and deeply perceptive psychological assistant. "
-    "Dynamically mirror the user's cognitive state and emotional energy to keep interactions flexible. "
-    "Adopt a highly clean, direct, and ultra-precise response format. "
-    "Keep answers under 3-4 sentences unless analyzing complex data arrays or providing code. "
-    "If you completely lack verified information or metrics for a request, reply: 'I do not have access to that information.' "
-    "If you have the data, present it directly. Never implement fluff, speculation, imagination, or conversational padding."
+    "Sizning ismingiz Qadam. Siz xolis, chuqur tahliliy va qat'iy psixologik yordamchisiz. "
+    "Muloqotda moslanuvchan bo'lish uchun foydalanuvchining kognitiv holati va hissiy energiyasini aks ettiring. "
+    "Muloqot uslubingiz o'ta toza, to'g'ridan-to'g'ri va aniq bo'lishi shart (Klode (Claude) uslubida). "
+    "Murakkab ma'lumotlar tahlili yoki kod taqdim etilayotgan holatlardan tashqari, javoblaringizni 3-4 gapdan oshirmang. "
+    "Agar so'ralgan ma'lumot yoki statistika sizda mutlaqo mavjud bo'lmasa, aniq qilib: 'Menda ushbu ma'lumotga kirish huquqi yo'q.' deb javob bering. "
+    "Agar ma'lumot mavjud bo'lsa, uni to'g'ridan-to'g'ri taqdim eting. Ortiqcha gaplar, taxminlar va mubolag'alardan foydalanmang."
 )
 
 def save_to_memory(user_id, role, content):
@@ -44,17 +44,15 @@ def get_history_context(user_id):
     return context
 
 async def process_multimedia_message(message: types.Message, file_id: str, prompt_text: str):
-    """Downloads files safely from Telegram and forwards them directly to the Gemini API."""
+    """Telegramdan fayllarni yuklab oladi va to'g'ridan-to'g'ri Gemini API ga uzatadi."""
     await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     
     file_info = await bot.get_file(file_id)
     file_path = file_info.file_path
     
-    # Extract file contents as binary data
     file_bytes = await bot.download_file(file_path)
     file_data = file_bytes.read()
     
-    # Establish correct MIME mapping for documents, audio, and photos
     ext = file_path.split('.')[-1].lower()
     mime_types = {
         'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
@@ -66,7 +64,7 @@ async def process_multimedia_message(message: types.Message, file_id: str, promp
     mime_type = mime_types.get(ext, 'application/octet-stream')
 
     history = get_history_context(message.chat.id)
-    user_context = prompt_text if prompt_text else "Analyze this attachment according to your system formatting."
+    user_context = prompt_text if prompt_text else "Ushbu biriktirilgan faylni tizim formati bo'yicha tahlil qiling."
     full_prompt = f"History:\n{history}\nUser Request: {user_context}"
 
     try:
@@ -78,20 +76,20 @@ async def process_multimedia_message(message: types.Message, file_id: str, promp
             ],
             config=genai_types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
-                tools=[{"google_search": {}}]  # Active live Google Search grounding
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
             )
         )
         
         if response and response.text:
             reply_text = response.text
-            save_to_memory(message.chat.id, "User", f"[Sent File: .{ext}] {prompt_text if prompt_text else ''}")
+            save_to_memory(message.chat.id, "User", f"[Fayl yuborildi: .{ext}] {prompt_text if prompt_text else ''}")
             save_to_memory(message.chat.id, "AI", reply_text)
             await message.reply(reply_text, parse_mode="Markdown")
         else:
-            await message.reply("I do not have access to that information.")
+            await message.reply("Menda ushbu ma'lumotga kirish huquqi yo'q.")
     except Exception:
         logging.exception("Gemini Media Pipeline Exception:")
-        await message.reply("⚠️ Service temporarily unavailable. Please try again later.")
+        await message.reply("⚠️ Xizmat vaqtincha imkonsiz. Iltimos, birozdan keyin qayta urinib ko'ring.")
 
 @dp.message(F.text)
 async def handle_text_message(message: types.Message):
@@ -99,13 +97,13 @@ async def handle_text_message(message: types.Message):
     user_id = message.chat.id
 
     if user_query == "/start":
-        await message.reply("Qadam active. Send text, images, voice messages, or documents (PDF, Docx, Xlsx).")
+        await message.reply("Qadam faol. Matn, rasm, ovozli xabar yoki hujjat (PDF, Docx, Xlsx) yuborishingiz mumkin.")
         return
         
     if user_query == "/clear":
         if user_id in CHAT_MEMORY:
             CHAT_MEMORY[user_id] = []
-        await message.reply("Memory reset successfully.")
+        await message.reply("Suhbat tarixi tozalandi.")
         return
 
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
@@ -118,7 +116,7 @@ async def handle_text_message(message: types.Message):
             contents=full_prompt,
             config=genai_types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
-                tools=[{"google_search": {}}]  # Triggers Google Web Search when asking for news or stats
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
             )
         )
         
@@ -128,12 +126,11 @@ async def handle_text_message(message: types.Message):
             save_to_memory(user_id, "AI", reply_text)
             await message.reply(reply_text, parse_mode="Markdown")
         else:
-            await message.reply("I do not have access to that information.")
+            await message.reply("Menda ushbu ma'lumotga kirish huquqi yo'q.")
     except Exception:
         logging.exception("Gemini Text Pipeline Exception:")
-        await message.reply("⚠️ Service temporarily unavailable. Please try again later.")
+        await message.reply("⚠️ Xizmat vaqtincha imkonsiz. Iltimos, birozdan keyin qayta urinib ko'ring.")
 
-# Specific Telegram format routing
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
     photo_id = message.photo[-1].file_id
