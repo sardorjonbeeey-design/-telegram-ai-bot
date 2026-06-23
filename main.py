@@ -64,7 +64,7 @@ async def handle_text_message(message: types.Message):
 
     try:
         loop = asyncio.get_event_loop()
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model='gemini-2.5-flash-lite',
         
         # Asinxron oqim to'silib qolmasligi uchun executor'da bajaramiz
         response = await loop.run_in_executor(
