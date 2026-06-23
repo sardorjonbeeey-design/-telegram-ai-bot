@@ -88,10 +88,17 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+    logging.info(f"Web server successfully started on port {port}")
+    # Keep web server alive without blocking the main loop
+    while True:
+        await asyncio.sleep(3600)
 
 async def main():
-    await start_web_server()
-    await dp.start_polling(bot)
+    # Run BOTH the web server and the telegram polling side-by-side concurrently
+    await asyncio.gather(
+        start_web_server(),
+        dp.start_polling(bot)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
