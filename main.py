@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.enums.chat_action import ChatAction  # Clean, type-safe status actions
 from google import genai
 from google.genai import errors
 from google.genai import types as genai_types
@@ -16,15 +17,17 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- GLOBAL COMPLIANT CHAT MEMORY ---
+# --- GLOBAL IN-MEMORY CHAT STORAGE ---
 CHAT_MEMORY = {}
 
 SYSTEM_INSTRUCTION = (
-    "You are a friendly Telegram chat assistant. Keep all responses brief, direct, "
-    "and under 3 sentences long. Avoid formatting long bullet points or essays. "
-    "Be friendly but honest. Your response style should be identical to Claude's. "
-    "If the user sends an image, look at it carefully and describe exactly what you see "
-    "or answer their question about it directly."
+    "You are a friendly, highly capable Telegram assistant named Qadam. "
+    "Keep all responses brief, direct, and under 3-4 sentences unless providing code or structured analysis. "
+    "Your style is clean, modern, and professional, mirroring luxury minimalism. "
+    "Formatting Rule: Always format your text output cleanly. Use clear bold section headers for distinct parts, "
+    "bullet points for lists, and monospaced code blocks for code or logs. Never send raw, unstructured walls of text."
+    "You have access to Google Search for live, real-time facts—always use it when asked about current events, news, or setup details. "
+    "You can natively process images, voice messages, and documents (PDF/TXT) sent by the user."
 )
 
 def save_to_memory(user_id, role, content):
@@ -42,16 +45,23 @@ def get_history_context(user_id):
         context += f"{msg['role']}: {msg['content']}\n"
     return context
 
-# --- 1. HANDLE TEXT MESSAGES ---
+# --- 1. HANDLE TEXT MESSAGES & COMMANDS ---
 @dp.message(F.text)
 async def handle_text_message(message: types.Message):
     user_query = message.text.strip()
     user_id = message.chat.id
 
     if user_query == "/start":
-        await message.reply("Assalomu alaykum! Menga rasm yoki matn yuborishingiz mumkin.")
+        await message.reply("Assalomu alaykum! Senga qanday yordam bera olaman? Matn, rasm, ovozli xabar yoki hujjat yuborishing mumkin! 🚀")
+        return
+        
+    if user_query == "/clear":
+        CHAT_MEMORY[user_id] = []
+        await message.reply("Clear! Suhbat tarixi tozalandi. Yangi mavzuni boshlashimiz mumkin. 🧹")
         return
 
+    # Trigger instant text feedback
+    await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
     history = get_history_context(user_id)
     full_prompt = f"Conversation History:\n{history}\nCurrent User Message: {user_query}"
 
@@ -61,37 +71,74 @@ async def handle_text_message(message: types.Message):
 @dp.message(F.photo)
 async def handle_photo_message(message: types.Message):
     user_id = message.chat.id
-    # Get any text sent along with the photo (caption), or default to a standard request
-    user_query = message.caption.strip() if message.caption else "Analyze this image and tell me what you see."
+    user_query = message.caption.strip() if message.caption else "Analyze this image and describe what you see."
     
-    # Get the largest version of the photo to ensure best quality analysis
+    # Trigger image-processing specific status feedback
+    await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.UPLOAD_PHOTO)
     photo = message.photo[-1]
     
     try:
-        # Download the photo from Telegram servers into local memory
         file_info = await bot.get_file(photo.file_id)
         file_bytes = await bot.download_file(file_info.file_path)
-        image_data = file_bytes.read()
-        
-        # Format the image into the Part structure the new SDK expects
-        image_part = genai_types.Part.from_bytes(
-            data=image_data,
-            mime_type="image/jpeg"
-        )
+        image_part = genai_types.Part.from_bytes(data=file_bytes.read(), mime_type="image/jpeg")
         
         history = get_history_context(user_id)
-        contents = [
-            f"Conversation History:\n{history}\nCurrent User Request about this image: {user_query}",
-            image_part
-        ]
+        contents = [f"Conversation History:\n{history}\nUser Request about image: {user_query}", image_part]
         
-        await process_gemini_request(message, user_id, contents, f"[Sent a photo]: {user_query}")
-        
+        await process_gemini_request(message, user_id, contents, f"[Sent a Photo]: {user_query}")
     except Exception as e:
-        logging.error(f"Failed to process photo: {e}")
-        await message.reply("⚠️ Rasmni yuklab olishda xatolik yuz berdi.")
+        logging.error(f"Photo processing failed: {e}")
+        await message.reply("⚠️ Rasmni qayta ishlashda xatolik yuz berdi.")
 
-# --- COMMON GEMINI PROCESSING CORE ---
+# --- 3. HANDLE VOICE MESSAGES (VOICE-TO-TEXT) ---
+@dp.message(F.voice)
+async def handle_voice_message(message: types.Message):
+    user_id = message.chat.id
+    # Voice takes a second to process, show active typing signal right away
+    await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+    voice = message.voice
+
+    try:
+        file_info = await bot.get_file(voice.file_id)
+        file_bytes = await bot.download_file(file_info.file_path)
+        audio_part = genai_types.Part.from_bytes(data=file_bytes.read(), mime_type="audio/ogg")
+        
+        history = get_history_context(user_id)
+        contents = [f"Conversation History:\n{history}\nListen to this voice message and respond to it directly:", audio_part]
+        
+        await process_gemini_request(message, user_id, contents, "[Sent a Voice Note]")
+    except Exception as e:
+        logging.error(f"Voice note processing failed: {e}")
+        await message.reply("⚠️ Ovozli xabarni o'qishda xatolik yuz berdi.")
+
+# --- 4. HANDLE DOCUMENTS (PDF & TXT) ---
+@dp.message(F.document)
+async def handle_document_message(message: types.Message):
+    user_id = message.chat.id
+    user_query = message.caption.strip() if message.caption else "Summarize or explain the content of this file."
+    doc = message.document
+    
+    mime = doc.mime_type if doc.mime_type else ""
+    if not ("text" in mime or "pdf" in mime):
+        await message.reply("⚠️ Iltimos, faqat PDF yoki matnli (.txt) hujjat yuboring.")
+        return
+
+    # Trigger visual feedback while reading the document structure
+    await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+    try:
+        file_info = await bot.get_file(doc.file_id)
+        file_bytes = await bot.download_file(file_info.file_path)
+        doc_part = genai_types.Part.from_bytes(data=file_bytes.read(), mime_type=mime)
+        
+        history = get_history_context(user_id)
+        contents = [f"Conversation History:\n{history}\nUser query about this file: {user_query}", doc_part]
+        
+        await process_gemini_request(message, user_id, contents, f"[Sent a Document]: {user_query}")
+    except Exception as e:
+        logging.error(f"Document processing failed: {e}")
+        await message.reply("⚠️ Hujjatni yuklashda xatolik yuz berdi.")
+
+# --- COMMON GEMINI ENGINE PROCESSING WITH LIVE GOOGLE SEARCH ---
 async def process_gemini_request(message, user_id, contents, memory_query):
     max_retries = 3
     retry_delay = 3
@@ -101,17 +148,21 @@ async def process_gemini_request(message, user_id, contents, memory_query):
             response = ai_client.models.generate_content(
                 model='gemini-1.5-flash-002',
                 contents=contents,
-                config={'system_instruction': SYSTEM_INSTRUCTION}
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    tools=[{"google_search": {}}]
+                )
             )
             
             if response and response.text:
                 reply_text = response.text
                 save_to_memory(user_id, "User", memory_query)
                 save_to_memory(user_id, "AI", reply_text)
-                await message.reply(reply_text)
+                # Parse markdown correctly using standard markdown compatibility
+                await message.reply(reply_text, parse_mode="Markdown")
                 return
             else:
-                raise Exception("Empty text field received from API")
+                raise Exception("Empty response payload received")
 
         except errors.APIError as api_err:
             logging.error(f"Gemini API Error (Attempt {attempt+1}): {api_err}")
@@ -119,10 +170,10 @@ async def process_gemini_request(message, user_id, contents, memory_query):
                 await asyncio.sleep(retry_delay)
                 retry_delay *= 2
             else:
-                await message.reply("⚠️ API xatoligi yuz berdi.")
+                await message.reply("⚠️ Tizim xatoligi yuz berdi.")
                 return
         except Exception as e:
-            logging.error(f"General Connection Error (Attempt {attempt+1}): {e}")
+            logging.error(f"General Loop Error (Attempt {attempt+1}): {e}")
             await asyncio.sleep(retry_delay)
 
     await message.reply("⏳ Hozirda server band. Iltimos, bir daqiqadan so'ng qayta yozing.")
@@ -138,7 +189,7 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"Web server active on port {port}")
+    logging.info(f"Web service bound to port {port}")
     while True:
         await asyncio.sleep(3600)
 
