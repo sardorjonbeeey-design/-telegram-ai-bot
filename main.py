@@ -45,10 +45,11 @@ SYSTEM_INSTRUCTION = (
 )
 # Ensure this is at the very top of your start-up block
 async def main():
-    # This is the secret sauce: it clears out any 'zombie' connections
+    # 1. Stop Telegram from remembering old sessions
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Now start polling
+    # 2. Start the bot
+    print("Bot is starting up...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
