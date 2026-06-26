@@ -3,13 +3,10 @@ import io
 import asyncio
 import logging
 import itertools
-import time
-from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, BufferedInputFile
-from typing import Callable, Dict, Any, Awaitable
 import google.generativeai as genai
-import edge_tts
 from aiohttp import web
 from motor.motor_asyncio import AsyncIOMotorClient
 from huggingface_hub import InferenceClient
@@ -26,8 +23,6 @@ dp = Dispatcher()
 db = AsyncIOMotorClient(MONGODB_URI)["qadam_db"]
 history_col = db["history"]
 hf_client = InferenceClient(api_key=HF_TOKEN)
-voice_usage = {}
-VOICE_LIMIT = 20 
 
 # --- GEMINI MANAGER ---
 class GeminiManager:
@@ -58,8 +53,8 @@ async def cmd_start(msg: Message):
 async def handle_image(msg: Message):
     prompt = msg.text.replace("/image", "").strip()
     if not prompt:
-        await msg.reply("Iltimos, rasm uchun so'rovni kiriting.")
-        return
+        return await msg.reply("Iltimos, rasm uchun so'rovni kiriting.")
+    
     await bot.send_chat_action(msg.chat.id, "upload_photo")
     status = await msg.reply("🎨 Rasm yaratilmoqda...")
     try:
@@ -73,31 +68,14 @@ async def handle_image(msg: Message):
         logging.error(f"Image gen error: {e}")
         await status.edit_text("❌ Rasm yaratishda xatolik yuz berdi.")
 
-# --- VOICE LIMIT HANDLER ---
-@dp.message(Command("voice", "ovoz"))
-async def handle_voice(msg: Message):
-    user_id = msg.chat.id
-    
-    # Check your defined voice limit
-    if voice_usage.get(user_id, 0) >= VOICE_LIMIT:
-        await msg.reply("Ovoz limit tugadi!")
-        return
-
-    # Process voice generation
-    await bot.send_chat_action(msg.chat.id, "record_voice")
-    # ... (rest of your voice generation code)
-    voice_usage[user_id] = voice_usage.get(user_id, 0) + 1
-
-# --- TEXT CHAT HANDLER ---
 @dp.message(F.text)
 async def chat(msg: Message):
-    # Send typing action
+    # Intentional delay as requested
     try:
         await bot.send_chat_action(msg.chat.id, "typing")
     except:
         pass
     
-    # Optional intentional delay as you requested
     await asyncio.sleep(5)
     
     try:
@@ -111,12 +89,13 @@ async def chat(msg: Message):
         error_str = str(e)
         logging.error(f"Chat error: {error_str}")
         
-        # Handle API Limit Reached (429)
+        # If Gemini says quota exceeded, rotate key and tell user
         if "429" in error_str:
             gemini.rotate()
-            await msg.reply("Limitga yetildi, qaytadan urinib ko'ring.")
+            await msg.reply("Hozirda limit tugadi, bir ozdan so'ng qaytadan urinib ko'ring.")
         else:
             await msg.reply("Texnik muammo yuz berdi.")
+
 # --- WEB SERVER & MAIN ---
 async def start_web_server():
     app = web.Application()
