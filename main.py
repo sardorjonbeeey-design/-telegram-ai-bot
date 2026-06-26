@@ -72,6 +72,7 @@ async def chat(msg: types.Message):
 # --- MINIMAL RUNNER ---
 async def start_server():
     app = web.Application()
+    # The route must match exactly what you put in cron-job.org
     app.router.add_get("/", lambda r: web.Response(text="OK"))
     runner = web.AppRunner(app)
     await runner.setup()
