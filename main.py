@@ -107,6 +107,12 @@ async def chat(msg: types.Message):
         await msg.reply(reply)
     except:
         await msg.reply("Xatolik yuz berdi.")
+        
+@dp.message(Command("checkdb"))
+async def cmd_checkdb(msg: types.Message):
+    # This counts how many messages the bot has saved for you
+    count = await history_col.count_documents({"user_id": msg.chat.id})
+    await msg.reply(f"Do'stim, sening xotirangda hozir {count} ta xabar saqlangan.")
 
 # --- RUNNER ---
 async def main():
