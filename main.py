@@ -25,6 +25,15 @@ history_col = db["history"]
 voice_usage = {}
 VOICE_LIMIT = 20 
 
+async def main():
+    # This line clears any pending updates and kills old instances
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    print("Bot is starting...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
 # --- CUSTOM RATE LIMITER (NO EXTERNAL PACKAGE) ---
 class ThrottlingMiddleware(BaseMiddleware):
     def __init__(self, limit: float = 2.0):
