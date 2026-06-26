@@ -7,8 +7,8 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums.chat_action import ChatAction
 from huggingface_hub import InferenceClient
 import edge_tts
+import aiohttp
 from aiohttp import web
-from PIL import Image
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -81,12 +81,10 @@ async def generate_voice_reply(text: str, user_id: int) -> str:
     await communicate.save(file_path)
     return file_path
 
-# --- NEW EXPLICIT VOICE COMMANDS (/voice or /ovoz) ---
+# --- FEATURE 2: EXPLICIT VOICE COMMANDS (/voice or /ovoz) ---
 @dp.message(F.text.startswith("/voice") | F.text.startswith("/ovoz"))
 async def handle_explicit_voice_command(message: types.Message):
     user_id = message.chat.id
-    
-    # Extract the actual prompt after the command
     prompt = message.text.replace("/voice", "").replace("/ovoz", "").strip()
 
     if not prompt:
@@ -99,7 +97,6 @@ async def handle_explicit_voice_command(message: types.Message):
 
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.RECORD_VOICE)
 
-    # Context structure assembly
     tg_first_name = message.from_user.first_name if message.from_user else "Foydalanuvchi"
     identity_context = f"\nFoydalanuvchining Telegramdagi ismi: {tg_first_name}."
     messages_payload = [{"role": "system", "content": SYSTEM_INSTRUCTION + identity_context}]
@@ -108,8 +105,6 @@ async def handle_explicit_voice_command(message: types.Message):
 
     try:
         loop = asyncio.get_event_loop()
-        
-        # Get response text from Llama 3.3
         response = await loop.run_in_executor(
             None,
             lambda: hf_client.chat.completions.create(
@@ -125,15 +120,11 @@ async def handle_explicit_voice_command(message: types.Message):
             save_to_memory(user_id, "User", prompt)
             save_to_memory(user_id, "AI", reply_text)
             
-            # Send the written text response first
             await message.reply(reply_text, parse_mode="Markdown")
             
-            # Synthesize and send the voice note explicitly requested
             voice_file_path = await generate_voice_reply(reply_text, user_id)
             voice_input = types.FSInputFile(voice_file_path)
             await message.reply_voice(voice=voice_input)
-            
-            # Instantly clean up local disk space
             os.remove(voice_file_path)
         else:
             await message.reply("⚠️ Tizimdan bo'sh xabar qaytdi.")
@@ -142,13 +133,135 @@ async def handle_explicit_voice_command(message: types.Message):
         logging.error(f"Explicit Voice Generation Error: {e}")
         await message.reply("⚠️ Ovozli javob tayyorlashda xatolik yuz berdi.")
 
+# --- FEATURE 3: DIRECT IMAGE GENERATION VIA AIOHTTP (/image command) ---
+@dp.message(F.text.startswith("/image"))
+async def handle_image_generation(message: types.Message):
+    user_id = message.chat.id
+    prompt = message.text.replace("/image", "").strip()
+
+    if not prompt:
+        await message.reply("📝 Iltimos, rasmni tasvirlab bering. Masalan: `/image kelajakdagi shahar`")
+        return
+
+    if not check_and_update_limit(user_id):
+        await message.reply("📊 Sizning bugungi limitingiz tugadi.")
+        return
+
+    await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.UPLOAD_PHOTO)
+    logging.info(f"Generating image via aiohttp for prompt: {prompt}")
+
+    API_URL = f"https://api-inference.huggingface.co/models/{IMAGE_GEN_MODEL}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(API_URL, headers=headers, json={"inputs": prompt}) as response:
+                
+                if response.status == 503:
+                    error_data = await response.json()
+                    estimated_time = error_data.get("estimated_time", 20)
+                    await message.reply(f"⏳ Hugging Face serverlari uyg'onmoqda. Iltimos {int(estimated_time)} soniya kuting va qaytadan buyruq bering...")
+                    return
+                
+                if response.status != 200:
+                    raw_err = await response.text()
+                    logging.error(f"HF Image API status error {response.status}: {raw_err}")
+                    await message.reply("⚠️ Rasmni yuklab olishda API xatoligi yuz berdi.")
+                    return
+
+                image_bytes = await response.read()
+                photo_file = types.BufferedInputFile(image_bytes, filename="generated_image.png")
+                await message.reply_photo(photo=photo_file, caption=f"🎨 Sizning so'rovingiz bo'yicha rasm tayyorlandi!")
+                
+    except Exception as e:
+        logging.error(f"Image gen block failure: {e}")
+        await message.reply(f"⚠️ Rasmni yaratishda kutilmagan xatolik: `{str(e)}`", parse_mode="Markdown")
+
+# --- FEATURE 4: SPEECH-TO-TEXT VOICE NOTE READING ---
+@dp.message(F.voice)
+async def handle_voice_message(message: types.Message):
+    user_id = message.chat.id
+    if not check_and_update_limit(user_id):
+        await message.reply("📊 Bugungi limitingiz tugadi.")
+        return
+
+    await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+
+    try:
+        voice_file = await bot.get_file(message.voice.file_id)
+        audio_buffer = io.BytesIO()
+        await bot.download_file(voice_file.file_path, destination=audio_buffer)
+        audio_bytes = audio_buffer.getvalue()
+
+        loop = asyncio.get_event_loop()
+        transcription = await loop.run_in_executor(
+            None,
+            lambda: hf_client.automatic_speech_recognition(audio_bytes, model=WHISPER_MODEL)
+        )
+        
+        user_voice_text = transcription.text.strip() if hasattr(transcription, 'text') else str(transcription).strip()
+
+        if not user_voice_text:
+            await message.reply("🎙 Ovozli xabarni tushunib bo'lmadi.")
+            return
+
+        await message.reply(f"📝 *Men eshitgan matn:* _{user_voice_text}_", parse_mode="Markdown")
+        await process_chat_intelligence(message, user_voice_text)
+
+    except Exception as e:
+        logging.error(f"Voice pipeline error: {e}")
+        await message.reply("⚠️ Ovozni matnga o'girishda xatolik yuz berdi.")
+
+# --- FEATURE 5: MULTI-MODAL VISION SUPPORT (Photo recognition) ---
+@dp.message(F.photo)
+async def handle_photo_message(message: types.Message):
+    user_id = message.chat.id
+    if not check_and_update_limit(user_id):
+        await message.reply("📊 Bugungi limitingiz tugadi.")
+        return
+
+    await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+
+    try:
+        photo = message.photo[-1]
+        photo_file = await bot.get_file(photo.file_id)
+        img_buffer = io.BytesIO()
+        await bot.download_file(photo_file.file_path, destination=img_buffer)
+        img_bytes = img_buffer.getvalue()
+
+        vision_prompt = "Ushbu rasmda nimalar tasvirlangan? Batafsil o'zbek tilida tushuntirib ber."
+        
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: hf_client.chat.completions.create(
+                model=VISION_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": vision_prompt},
+                        {"type": "image", "image": img_bytes}
+                    ]
+                }],
+                max_tokens=300
+            )
+        )
+        
+        description = response.choices[0].message.content
+        await message.reply(f"👁 *Rasm tahlili:* \n\n{description}", parse_mode="Markdown")
+        
+        save_to_memory(user_id, "User", "[Foydalanuvchi rasm yubordi]")
+        save_to_memory(user_id, "AI", description)
+
+    except Exception as e:
+        logging.error(f"Vision engine error: {e}")
+        await message.reply("⚠️ Rasmni o'qishda kutilmagan xatolik yuz berdi.")
+
 # --- CLEAN STANDARD TEXT HANDLER (Text Only, No Voice) ---
 @dp.message(F.text)
 async def handle_standard_text(message: types.Message):
-    # Skip processing if it matches other commands we already setup
     if message.text.startswith("/image"):
         return
-        
     await process_chat_intelligence(message, message.text.strip())
 
 async def process_chat_intelligence(message: types.Message, user_query: str):
@@ -191,8 +304,6 @@ async def process_chat_intelligence(message: types.Message, user_query: str):
             reply_text = response.choices[0].message.content
             save_to_memory(user_id, "User", user_query)
             save_to_memory(user_id, "AI", reply_text)
-            
-            # Deliver text ONLY
             await message.reply(reply_text, parse_mode="Markdown")
         else:
             await message.reply("⚠️ Tizimdan bo'sh xabar qaytdi.")
@@ -200,6 +311,7 @@ async def process_chat_intelligence(message: types.Message, user_query: str):
     except Exception as e:
         logging.error(f"Core LLM Failure: {e}")
         await message.reply("⚠️ Javob qaytarishda xatolik yuz berdi.")
+
 # --- WEB SERVERS HOSTING CONFIGURATIONS ---
 async def handle_telegram_webhook(request):
     try:
