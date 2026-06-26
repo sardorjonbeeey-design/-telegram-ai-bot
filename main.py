@@ -9,7 +9,6 @@ from aiogram.types import Message
 from typing import Callable, Dict, Any, Awaitable
 import google.generativeai as genai
 import edge_tts
-from aiohttp import web
 from motor.motor_asyncio import AsyncIOMotorClient
 from duckduckgo_search import DDGS
 
@@ -26,7 +25,7 @@ history_col = db["history"]
 voice_usage = {}
 VOICE_LIMIT = 20 
 
-# --- RATE LIMITER MIDDLEWARE ---
+# --- CUSTOM RATE LIMITER (NO EXTERNAL PACKAGE) ---
 class ThrottlingMiddleware(BaseMiddleware):
     def __init__(self, limit: float = 2.0):
         self.limit = limit
@@ -36,7 +35,7 @@ class ThrottlingMiddleware(BaseMiddleware):
         user_id = event.from_user.id
         now = time.time()
         if now - self.cache.get(user_id, 0) < self.limit:
-            return # Block spam
+            return # Simply ignore spammed messages
         self.cache[user_id] = now
         return await handler(event, data)
 
@@ -56,18 +55,16 @@ class GeminiManager:
 gemini = GeminiManager(GEMINI_KEYS)
 
 SYSTEM_INSTRUCTION = (
-    "Sen o'zbek tilida mukammal so'zlashadigan do'stsan. "
-    "Muloqot uslubing: 1. Insoniy, samimiy va hazilkash bo'l. "
-    "2. Grammatikani to'g'ri qo'lla. "
-    "3. O'zbekcha tabiiy so'zlashuvdan (Qalay, nima gap?) foydalan. "
-    "4. Javoblaring qisqa, o'tkir va insoniy bo'lsin."
+    "Sen Qadamsan, foydalanuvchining eng yaqin, samimiy do'stisan. "
+    "Muloqot uslubing: "
+    "1. Robotcha ohangni butunlay yig'ishtir. 'Siz' deb murojaat qilma, doim 'sen' deb gaplash. "
+    "2. O'zbek tilidagi jonli so'zlashuv uslubini qo'lla (masalan: 'qalay', 'nima gaplar', 'to'g'risi', 'shunaqasi ham bo'ladimi'). "
+    "3. So'zma-so'z tarjima qilma, o'zbekcha hissiyot va mentalitetga mos javob ber. "
+    "4. Javoblaring doimo qisqa, tushunarli va insoniy bo'lsin. Uzun va zerikarli matnlardan qoch. "
+    "5. Agar foydalanuvchi biror xato qilsa yoki g'alati narsa aytsa, do'stona hazil bilan javob ber, lekin o'rgatuvchi ohangda bo'lma."
 )
 
-# --- DATABASE & HANDLERS ---
-async def get_history_context(user_id):
-    rows = await history_col.find({"user_id": user_id}).sort("_id", -1).limit(5).to_list(length=5)
-    return [{"role": "user" if r["role"] == "User" else "model", "parts": [r["content"]]} for r in reversed(rows)]
-
+# --- HANDLERS ---
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
     await msg.reply("Assalomu alaykum! Men Qadamman.")
@@ -79,10 +76,13 @@ async def handle_voice(msg: Message):
         await msg.reply("Ovozli xabar limiti tugadi. Hozircha faqat matn!")
         return
     
-    hist = await get_history_context(user_id)
-    text = hist[-1]["parts"][0] if hist else "Assalomu alaykum."
-    voice_usage[user_id] = voice_usage.get(user_id, 0) + 1
+    # Simple context fetch
+    hist_cursor = history_col.find({"user_id": user_id}).sort("_id", -1).limit(1)
+    hist = await hist_cursor.to_list(length=1)
+    text = hist[0]["content"] if hist else "Assalomu alaykum."
     
+    voice_usage[user_id] = voice_usage.get(user_id, 0) + 1
+    await bot.send_chat_action(msg.chat.id, "record_voice")
     path = f"voice_{user_id}.mp3"
     await edge_tts.Communicate(text, "uz-UZ-MadinaNeural").save(path)
     await msg.reply_voice(voice=types.FSInputFile(path))
@@ -92,9 +92,8 @@ async def handle_voice(msg: Message):
 async def chat(msg: Message):
     await bot.send_chat_action(msg.chat.id, "typing")
     try:
-        chat_session = gemini.model.start_chat(history=await get_history_context(msg.chat.id))
+        chat_session = gemini.model.start_chat(history=[])
         res = chat_session.send_message(f"{SYSTEM_INSTRUCTION}\n\nFoydalanuvchi: {msg.text}")
-        await history_col.insert_one({"user_id": msg.chat.id, "role": "User", "content": msg.text})
         await history_col.insert_one({"user_id": msg.chat.id, "role": "AI", "content": res.text})
         await msg.reply(res.text)
     except Exception as e:
