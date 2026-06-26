@@ -25,13 +25,49 @@ history_col = db["history"]
 voice_usage = {}
 VOICE_LIMIT = 20 
 
+import os
+import asyncio
+import logging
+import itertools
+import time
+from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
+from aiogram.filters import Command
+from aiogram.types import Message
+from typing import Callable, Dict, Any, Awaitable
+import google.generativeai as genai
+import edge_tts
+from aiohttp import web  # <--- IMPORT THIS
+from motor.motor_asyncio import AsyncIOMotorClient
+
+# --- CONFIGURATION & SETUP ---
+# ... (Keep all your existing Bot, DP, DB, and GeminiManager setups here)
+
+# --- WEB SERVER SETUP (To stop the Render timeout) ---
+async def health_check(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Web server started on port {port}")
+
+# --- UPDATED MAIN ENTRY POINT ---
 async def main():
-    # 1. Start the web server and the bot polling simultaneously
-    # This prevents the "Port scan timeout" error
-    await asyncio.gather(
-        start_web_server(),
-        run_bot()
-    )
+    # 1. Start the web server first (keeps Render happy)
+    await start_web_server()
+    
+    # 2. Start the bot (polling)
+    print("Starting polling...")
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
