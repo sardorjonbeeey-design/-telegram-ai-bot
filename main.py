@@ -106,34 +106,26 @@ async def handle_voice(msg: Message):
 
 @dp.message(F.text)
 async def chat(msg: Message):
-    # 1. Log that the message was received
-    logging.info(f"Bot received text from {msg.from_user.id}: {msg.text}")
-    
-    await bot.send_chat_action(msg.chat.id, "typing")
-    
+    # 1. Use a try-except block for the action as well to prevent crashes
     try:
-        # 2. Add a check to see if Gemini model is ready
-        if not gemini.model:
-            logging.error("Gemini model is not initialized!")
-            return
+        await bot.send_chat_action(msg.chat.id, "typing")
+    except Exception:
+        pass # If we can't send "typing", it's not a big deal
 
+    try:
         chat_session = gemini.model.start_chat(history=[])
         res = chat_session.send_message(f"{SYSTEM_INSTRUCTION}\n\nFoydalanuvchi: {msg.text}")
-        
-        # 3. Log the response
-        logging.info("Gemini generated response.")
-        
         await history_col.insert_one({"user_id": msg.chat.id, "role": "AI", "content": res.text})
         await msg.reply(res.text)
-        
     except Exception as e:
-        logging.error(f"Error in chat handler: {e}")
+        logging.error(f"Chat error: {e}")
+        # 2. DO NOT call chat(msg) again. 
+        # Instead, rotate key and tell the user to try again.
         if "429" in str(e):
             gemini.rotate()
-            await chat(msg)
+            await msg.reply("Limitga yetildi, qaytadan urinib ko'ring.")
         else:
-            # Send a simple text error to see if reply works
-            await msg.answer("Xatolik yuz berdi, iltimos qayta urinib ko'ring.")
+            await msg.reply("Texnik muammo yuz berdi.")
 
 # --- WEB SERVER & MAIN ---
 async def start_web_server():
