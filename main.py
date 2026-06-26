@@ -43,7 +43,11 @@ SYSTEM_INSTRUCTION = (
     "Sizning ismingiz Qadam. Siz foydalanuvchi uchun samimiy va ishonchli AI do'st/yordamcisiz. "
     "Siyosiy mavzularda betaraf va xolis qoling. O'zbekiston qonunchiligi va milliy qadriyatlarga hurmat bilan yondashing."
 )
-
+# Ensure this is at the very top of your start-up block
+async def main():
+    # This clears the conflict with old sessions
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 # --- DATABASE HELPERS ---
 async def save_to_memory(user_id, role, content):
     await history_col.insert_one({"user_id": user_id, "role": role, "content": content})
