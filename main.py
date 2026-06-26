@@ -26,10 +26,14 @@ voice_usage = {}
 VOICE_LIMIT = 20 
 
 async def main():
-    # This line clears any pending updates and kills old instances
+    # 1. Force Telegram to drop everything else
     await bot.delete_webhook(drop_pending_updates=True)
     
-    print("Bot is starting...")
+    # 2. Add a small delay to ensure the old container is fully dead
+    await asyncio.sleep(5)
+    
+    # 3. Start polling
+    logging.info("Starting polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
