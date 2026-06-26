@@ -21,11 +21,31 @@ RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 MONGODB_URI = os.environ.get("MONGODB_URI")
-
-# Escaping URI for MongoDB
-uri_parts = urllib.parse.urlparse(MONGODB_URI)
-escaped_uri = f"{uri_parts.scheme}://{urllib.parse.quote_plus(uri_parts.username)}:{urllib.parse.quote_plus(uri_parts.password)}@{uri_parts.netloc}{uri_parts.path}"
-client = AsyncIOMotorClient(escaped_uri)
+# --- MONGODB ESCAPING (ROBUST) ---
+# Assuming your MONGODB_URI is: mongodb+srv://username:password@cluster.mongodb.net/db
+# This approach finds the parts by looking for the @ and the : after the protocol
+try:
+    # Remove protocol prefix
+    clean_uri = MONGODB_URI.replace("mongodb+srv://", "").replace("mongodb://", "")
+    
+    # Split into user:pass and rest
+    user_pass, rest = clean_uri.split("@", 1)
+    user, password = user_pass.split(":", 1)
+    
+    # Escape
+    escaped_user = urllib.parse.quote_plus(user)
+    escaped_pass = urllib.parse.quote_plus(password)
+    
+    # Rebuild
+    escaped_uri = f"mongodb+srv://{escaped_user}:{escaped_pass}@{rest}"
+    
+    client = AsyncIOMotorClient(escaped_uri)
+    db = client["qadam_db"]
+except Exception as e:
+    logging.error(f"Failed to parse MongoDB URI: {e}")
+    # Fallback to direct connection if splitting fails
+    client = AsyncIOMotorClient(MONGODB_URI)
+    db = client["qadam_db"]
 db = client["qadam_db"]
 history_col = db["history"]
 users_col = db["users"]
