@@ -7,3 +7,5 @@ pymongo
 duckduckgo-search
 aiohttp
 huggingface_hub
+langdetect
+speechrecognition
