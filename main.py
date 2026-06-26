@@ -73,17 +73,14 @@ async def handle_search(msg: types.Message):
 
 @dp.message(Command("voice", "ovoz"))
 async def handle_voice(msg: types.Message):
-    text = msg.text.replace("/voice", "").replace("/ovoz", "", 1).strip()
-    if not text:
-        hist = await get_history_context(msg.chat.id)
-        text = hist[-1]["content"] if hist else "Assalomu alaykum."
+    # Oxirgi yozishmani olish
+    hist = await get_history_context(msg.chat.id)
+    text = hist[-1]["content"] if hist else "Assalomu alaykum."
 
-    # SMART KEYWORD DETECTION
-    # If it contains specific English common words, use Emma. Otherwise, Madina.
-    english_keywords = ["hello", "hi", "what", "how", "the", "you", "is", "name"]
-    is_english = any(word in text.lower() for word in english_keywords)
-    
-    voice = "en-US-EmmaNeural" if is_english else "uz-UZ-MadinaNeural"
+    # Ovozni aniqlash mantig'ini o'zgartiramiz: 
+    # Agar matnda o'zbekcha belgilar ko'p bo'lsa, Madina.
+    # Inglizcha deb o'ylamasligi uchun uni majburan Madinaga yo'naltiramiz.
+    voice = "uz-UZ-MadinaNeural" 
     
     await bot.send_chat_action(msg.chat.id, "record_voice")
     path = f"voice_{msg.chat.id}.mp3"
