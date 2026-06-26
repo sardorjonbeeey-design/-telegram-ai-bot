@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from huggingface_hub import InferenceClient
 import edge_tts
+from aiohttp import web
 from motor.motor_asyncio import AsyncIOMotorClient
 
 # --- CONFIGURATION ---
@@ -155,6 +156,19 @@ async def keep_alive():
             except: pass
             await asyncio.sleep(300)
 
+async def run_dummy_server():
+    app = web.Application()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Dummy web server running on port {port}")
+
 if __name__ == "__main__":
-    asyncio.create_task(keep_alive())
-    dp.run_polling(bot)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(run_dummy_server())
+    loop.create_task(keep_alive())
+    print("Bot is starting...")
+    loop.run_until_complete(dp.start_polling(bot))
