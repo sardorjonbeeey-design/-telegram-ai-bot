@@ -26,14 +26,15 @@ voice_usage = {}
 VOICE_LIMIT = 20 
 
 async def main():
-    # 1. Force Telegram to drop everything else
+    # 1. Start the web server and the bot polling simultaneously
+    # This prevents the "Port scan timeout" error
+    await asyncio.gather(
+        start_web_server(),
+        run_bot()
+    )
+
+async def run_bot():
     await bot.delete_webhook(drop_pending_updates=True)
-    
-    # 2. Add a small delay to ensure the old container is fully dead
-    await asyncio.sleep(5)
-    
-    # 3. Start polling
-    logging.info("Starting polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
