@@ -29,22 +29,6 @@ hf_client = InferenceClient(api_key=HF_TOKEN)
 voice_usage = {}
 VOICE_LIMIT = 20 
 
-# --- MIDDLEWARE ---
-class ThrottlingMiddleware(BaseMiddleware):
-    def __init__(self, limit: float = 2.0):
-        self.limit = limit
-        self.cache = {}
-
-    async def __call__(self, handler, event, data):
-        user_id = event.from_user.id
-        now = time.time()
-        if now - self.cache.get(user_id, 0) < self.limit:
-            return 
-        self.cache[user_id] = now
-        return await handler(event, data)
-
-dp.message.middleware(ThrottlingMiddleware(limit=2.0))
-
 # --- GEMINI MANAGER ---
 class GeminiManager:
     def __init__(self, keys):
@@ -106,21 +90,24 @@ async def handle_voice(msg: Message):
 
 @dp.message(F.text)
 async def chat(msg: Message):
-    # 1. Use a try-except block for the action as well to prevent crashes
+    # Try to send typing action, but don't crash if it fails
     try:
         await bot.send_chat_action(msg.chat.id, "typing")
-    except Exception:
-        pass # If we can't send "typing", it's not a big deal
-
+    except:
+        pass
+    
+    # 5-second delay before processing
+    await asyncio.sleep(5)
+    
     try:
         chat_session = gemini.model.start_chat(history=[])
         res = chat_session.send_message(f"{SYSTEM_INSTRUCTION}\n\nFoydalanuvchi: {msg.text}")
+        
         await history_col.insert_one({"user_id": msg.chat.id, "role": "AI", "content": res.text})
         await msg.reply(res.text)
     except Exception as e:
         logging.error(f"Chat error: {e}")
-        # 2. DO NOT call chat(msg) again. 
-        # Instead, rotate key and tell the user to try again.
+        # Add your key rotation logic back here if you still want it!
         if "429" in str(e):
             gemini.rotate()
             await msg.reply("Limitga yetildi, qaytadan urinib ko'ring.")
