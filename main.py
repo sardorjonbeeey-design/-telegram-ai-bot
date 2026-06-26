@@ -37,11 +37,12 @@ bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 SYSTEM_INSTRUCTION = (
-    "Sizning ismingiz Qadam. Siz foydalanuvchi uchun samimiy va ishonchli AI do'st/yordamcisiz. "
-    "Siyosiy mavzularda betaraf va xolis qoling. O'zbekiston qonunchiligi va milliy qadriyatlarga hurmat bilan yondashing."
+    "Sening isming Qadam AI. Sen foydalanuvchi uchun samimiy va ishonchli AI do'st/yordamcisan. "
+    "Siyosiy mavzularda betaraf va xolis qol. O'zbekiston qonunchiligi va milliy qadriyatlarga hurmat bilan yondash."
+    "Sen Claude stilidan foydalanasan, doim rost va tog'ri gapirasan, bilsang javob berasan, bilmasang to'g'risini aytasan."
 )
 
-# --- DATABASE & BOT HELPERS ---
+# --- DATABASE HELPERS ---
 async def save_to_memory(user_id, role, content):
     await history_col.insert_one({"user_id": user_id, "role": role, "content": content})
     if await history_col.count_documents({"user_id": user_id}) > 10:
@@ -65,7 +66,7 @@ async def check_and_update_limit(user_id, first_name):
     await users_col.update_one({"user_id": user_id}, {"$inc": {"request_count": 1}, "$set": {"first_name": first_name}})
     return True
 
-# --- COMMANDS & HANDLERS ---
+# --- COMMANDS ---
 @dp.message(Command("start"))
 async def handle_start(message: types.Message):
     await message.reply("Assalomu alaykum! Men Qadam — sizning AI yordamchingizman.")
@@ -75,14 +76,36 @@ async def handle_clear(message: types.Message):
     await history_col.delete_many({"user_id": message.chat.id})
     await message.reply("✅ Suhbat tarixi tozalandi.")
 
+# --- FEATURES ---
 @dp.message(F.text.startswith(("/voice", "/ovoz")))
 async def handle_voice(message: types.Message):
     user_id = message.chat.id
     text = message.text.replace("/voice", "").replace("/ovoz", "").strip() or (await get_history_context(user_id))[-1]["content"]
+    
+    # Language detection
+    voice = "en-US-EmmaNeural" if any(ord(char) < 128 for char in text) else "uz-UZ-MadinaNeural"
+    
+    await bot.send_chat_action(chat_id=user_id, action="record_voice")
     path = f"voice_{user_id}.mp3"
-    await edge_tts.Communicate(text, "uz-UZ-MadinaNeural").save(path)
+    await edge_tts.Communicate(text, voice).save(path)
     await message.reply_voice(voice=types.FSInputFile(path))
     os.remove(path)
+
+@dp.message(F.text.startswith("/image"))
+async def handle_image(message: types.Message):
+    prompt = message.text.replace("/image", "").strip()
+    await bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
+    status_msg = await message.reply("🎨 Rasm yaratilmoqda...")
+    
+    try:
+        img = await asyncio.get_event_loop().run_in_executor(None, lambda: hf_client.text_to_image(prompt, model="black-forest-labs/FLUX.1-schnell"))
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        await message.reply_photo(photo=types.BufferedInputFile(buf.getvalue(), filename="img.png"))
+        await status_msg.delete()
+    except Exception as e:
+        await status_msg.edit_text("❌ Rasm yaratishda xatolik yuz berdi.")
 
 @dp.message(F.text)
 async def process_chat(message: types.Message):
@@ -90,6 +113,7 @@ async def process_chat(message: types.Message):
     if not await check_and_update_limit(message.chat.id, message.from_user.first_name): 
         return await message.reply("Limit tugadi.")
     
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     msgs = [{"role": "system", "content": SYSTEM_INSTRUCTION}] + await get_history_context(message.chat.id)
     msgs.append({"role": "user", "content": message.text})
     
@@ -100,8 +124,7 @@ async def process_chat(message: types.Message):
         await save_to_memory(message.chat.id, "AI", reply)
         await message.reply(reply)
     except Exception as e:
-        logging.error(f"Error: {e}")
-        await message.reply("Xatolik yuz berdi.")
+        await message.reply("Kechirasiz, javob olishda xatolik yuz berdi.")
 
 # --- RUNNER ---
 async def start_bot():
@@ -109,16 +132,12 @@ async def start_bot():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    # 1. Setup minimal web server for Render
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="Bot is running"))
     runner = web.AppRunner(app)
-    
     loop = asyncio.get_event_loop()
     loop.run_until_complete(runner.setup())
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     loop.run_until_complete(site.start())
-    
-    # 2. Start polling
     loop.run_until_complete(start_bot())
