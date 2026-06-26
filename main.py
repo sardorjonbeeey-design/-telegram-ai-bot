@@ -181,8 +181,29 @@ async def handle_webhook(request):
     await dp.feed_update(bot, types.Update(**data))
     return web.Response(text="OK")
 
+# --- ADD THIS FUNCTION AT THE TOP LEVEL OF YOUR FILE ---
+async def keep_alive():
+    import aiohttp
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                # This pings your bot's own root URL every 5 minutes
+                async with session.get(RENDER_EXTERNAL_URL) as response:
+                    logging.info(f"Pinged {RENDER_EXTERNAL_URL}, status: {response.status}")
+            except Exception as e:
+                logging.error(f"Ping failed: {e}")
+            await asyncio.sleep(300) # Wait 5 minutes
+
+# --- UPDATE YOUR MAIN EXECUTION BLOCK ---
 if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    
+    # Start the keep_alive task
+    loop.create_task(keep_alive())
+    
+    # Existing web server logic
     app = web.Application()
-    app.router.add_post("/webhook", handle_webhook)
-    app.on_startup.append(lambda app: bot.set_webhook(f"{RENDER_EXTERNAL_URL}/webhook"))
+    # ... (rest of your app routing)
+    
+    # Start the web server
     web.run_app(app, port=int(os.environ.get("PORT", 10000)))
