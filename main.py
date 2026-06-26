@@ -70,6 +70,9 @@ def check_and_update_limit(user_id):
 async def handle_text_message(message: types.Message):
     user_query = message.text.strip()
     user_id = message.chat.id
+    
+    # Safely extract Telegram profile name as a fallback default
+    tg_first_name = message.from_user.first_name if message.from_user else "Foydalanuvchi"
 
     if user_query == "/start":
         await message.reply("Qadam faol. Hugging Face serverless rejimida muvaffaqiyatli ishlamoqda.")
@@ -87,15 +90,16 @@ async def handle_text_message(message: types.Message):
 
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
 
-    # Build context: System instructions + Conversation History + Current Query
-    messages_payload = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+    # Dynamic Identity Safety injection
+    identity_context = f"\nFoydalanuvchining Telegramdagi ismi: {tg_first_name}. Suhbat davomida uning ismi boshqa bo'lsa, o'sha ism bilan murojaat qiling."
+    
+    messages_payload = [{"role": "system", "content": SYSTEM_INSTRUCTION + identity_context}]
     messages_payload.extend(get_history_context(user_id))
     messages_payload.append({"role": "user", "content": user_query})
 
     try:
         loop = asyncio.get_event_loop()
         
-        # Execute the Hugging Face client call asynchronously
         response = await loop.run_in_executor(
             None,
             lambda: hf_client.chat.completions.create(
@@ -108,8 +112,11 @@ async def handle_text_message(message: types.Message):
 
         if response and response.choices:
             reply_text = response.choices[0].message.content
+            
+            # Save exact turn to context memory
             save_to_memory(user_id, "User", user_query)
             save_to_memory(user_id, "AI", reply_text)
+            
             await message.reply(reply_text, parse_mode="Markdown")
             return 
         else:
