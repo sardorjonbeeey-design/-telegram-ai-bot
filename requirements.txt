@@ -7,3 +7,5 @@ edge-tts
 Pillow
 motor
 pymongo
+langdetect
+duckduckgo-search
