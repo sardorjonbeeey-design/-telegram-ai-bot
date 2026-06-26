@@ -6,4 +6,3 @@ motor
 pymongo
 duckduckgo-search
 aiohttp
-aiogram-ratelimiter
