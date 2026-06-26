@@ -138,15 +138,27 @@ async def handle_photo(message: types.Message):
 @dp.message(F.text)
 async def process_chat(message: types.Message, query=None):
     query = query or message.text
-    if query.startswith("/"): return
-    if not await check_and_update_limit(message.chat.id, message.from_user.first_name): return await message.reply("Limit tugadi.")
+    logging.info(f"Received message from {message.chat.id}: {query}") # New Debug Line
+    
+    if query.startswith("/"): 
+        logging.info("Message was a command, skipping process_chat.")
+        return
+        
+    if not await check_and_update_limit(message.chat.id, message.from_user.first_name): 
+        return await message.reply("Limit tugadi.")
+        
     msgs = [{"role": "system", "content": SYSTEM_INSTRUCTION}] + await get_history_context(message.chat.id)
     msgs.append({"role": "user", "content": query})
-    res = await asyncio.get_event_loop().run_in_executor(None, lambda: hf_client.chat.completions.create(model="meta-llama/Llama-3.3-70B-Instruct", messages=msgs))
-    reply = res.choices[0].message.content
-    await save_to_memory(message.chat.id, "User", query)
-    await save_to_memory(message.chat.id, "AI", reply)
-    await message.reply(reply)
+    
+    try:
+        res = await asyncio.get_event_loop().run_in_executor(None, lambda: hf_client.chat.completions.create(model="meta-llama/Llama-3.3-70B-Instruct", messages=msgs))
+        reply = res.choices[0].message.content
+        await save_to_memory(message.chat.id, "User", query)
+        await save_to_memory(message.chat.id, "AI", reply)
+        await message.reply(reply)
+    except Exception as e:
+        logging.error(f"Error during AI processing: {e}")
+        await message.reply("Kechirasiz, javob olishda xatolik yuz berdi.")
 
 # --- RUNNER ---
 async def keep_alive():
