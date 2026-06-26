@@ -3,3 +3,5 @@ aiohttp==3.10.5
 huggingface_hub
 edge-tts
 Pillow
+motor
+pymongo
