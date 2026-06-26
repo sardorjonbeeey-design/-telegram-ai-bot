@@ -6,3 +6,4 @@ motor
 pymongo
 duckduckgo-search
 aiohttp
+huggingface_hub
