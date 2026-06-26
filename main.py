@@ -4,8 +4,7 @@ import logging
 from datetime import date
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums.chat_action import ChatAction
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted, GoogleAPIError
+from huggingface_hub import InferenceClient
 from aiohttp import web
 
 # Setup Logging
@@ -14,12 +13,13 @@ logging.basicConfig(level=logging.INFO)
 # Environment Variables
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
-# Load and clean multi-API keys from a comma-separated string
-RAW_KEYS = os.environ.get("GEMINI_API_KEY", "")
-API_KEYS = [k.strip() for k in RAW_KEYS.split(",") if k.strip()]
+# Initialize Hugging Face Inference Client
+# Using a powerful open-source 70B parameter model
+MODEL_NAME = "meta-llama/Llama-3.3-70B-Instruct"
+hf_client = InferenceClient(api_key=HF_TOKEN)
 
-CURRENT_KEY_INDEX = 0
 DAILY_LIMIT = 50  
 
 # Initialize Bot and Dispatcher
@@ -34,26 +34,9 @@ SYSTEM_INSTRUCTION = (
     "Sizning ismingiz Qadam. Siz foydalanuvchi uchun samimiy va ishonchli AI do'st/yordamchisiz. "
     "Siyosiy mavzularda hech qachon biror tomonni yoqlamang yoki o'z fikringizni bildirmang — betaraf va xolis qoling. "
     "O'zbekiston qonunchiligi, davlat siyosati va milliy qadriyatlarga hurmat bilan munosabatda bo'ling. "
-    "Javoblaringiz halol, aniq va to'g'ridan-to'g'ri bo'lsin (Claude uslubida). "
+    "Javoblaringiz halol, aniq va to'g'ridan-to'g'ri bo'lsin. "
     "Javoblaringizni maksimal 3-4 gapdan oshirmang. Ortiqcha taxminlar va mubolag'alardan foydalanmang."
 )
-
-def get_next_api_key():
-    """Rotates to the next available API key in the list."""
-    global CURRENT_KEY_INDEX
-    if not API_KEYS:
-        return None
-    CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
-    selected_key = API_KEYS[CURRENT_KEY_INDEX]
-    genai.configure(api_key=selected_key)
-    logging.info(f"🔄 Rotated to API Key index: {CURRENT_KEY_INDEX}")
-    return selected_key
-
-# Configure the initial API key on startup
-if API_KEYS:
-    genai.configure(api_key=API_KEYS[CURRENT_KEY_INDEX])
-else:
-    logging.error("CRITICAL: No GEMINI_API_KEY found in environment variables!")
 
 def save_to_memory(user_id, role, content):
     if user_id not in CHAT_MEMORY:
@@ -64,11 +47,13 @@ def save_to_memory(user_id, role, content):
 
 def get_history_context(user_id):
     if user_id not in CHAT_MEMORY:
-        return ""
-    context = ""
+        return []
+    
+    formatted_history = []
     for msg in CHAT_MEMORY[user_id]:
-        context += f"{msg['role']}: {msg['content']}\n"
-    return context
+        role_type = "user" if msg['role'] == "User" else "assistant"
+        formatted_history.append({"role": role_type, "content": msg['content']})
+    return formatted_history
 
 def check_and_update_limit(user_id):
     today = date.today().isoformat()
@@ -87,7 +72,7 @@ async def handle_text_message(message: types.Message):
     user_id = message.chat.id
 
     if user_query == "/start":
-        await message.reply("Qadam faol. Kengaytirilgan limitlar rejimida ishlamoqda.")
+        await message.reply("Qadam faol. Hugging Face serverless rejimida muvaffaqiyatli ishlamoqda.")
         return
 
     if user_query == "/clear":
@@ -102,47 +87,39 @@ async def handle_text_message(message: types.Message):
 
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
 
-    history = get_history_context(user_id)
-    full_prompt = f"{SYSTEM_INSTRUCTION}\n\nSuhbat tarixi:\n{history}\nFoydalanuvchi: {user_query}\nJavob:"
+    # Build context: System instructions + Conversation History + Current Query
+    messages_payload = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+    messages_payload.extend(get_history_context(user_id))
+    messages_payload.append({"role": "user", "content": user_query})
 
-    # Attempt loop for key rotation
-    attempts = len(API_KEYS) if API_KEYS else 1
-    for attempt in range(attempts):
-        try:
-            loop = asyncio.get_event_loop()
-            model = genai.GenerativeModel('gemini-2.0-flash')
-
-            response = await loop.run_in_executor(
-                None,
-                lambda: model.generate_content(full_prompt)
+    try:
+        loop = asyncio.get_event_loop()
+        
+        # Execute the Hugging Face client call asynchronously
+        response = await loop.run_in_executor(
+            None,
+            lambda: hf_client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages_payload,
+                max_tokens=250,
+                temperature=0.7
             )
+        )
 
-            if response and response.text:
-                reply_text = response.text
-                save_to_memory(user_id, "User", user_query)
-                save_to_memory(user_id, "AI", reply_text)
-                await message.reply(reply_text, parse_mode="Markdown")
-                return 
-            else:
-                await message.reply("⚠️ Sun'iy intellektdan bo'sh xabar qaytdi.")
-                return
-
-        except (ResourceExhausted, GoogleAPIError) as e:
-            error_str = str(e)
-            logging.warning(f"⚠️ Key index {CURRENT_KEY_INDEX} hit an error: {error_str}. Trying next key...")
-            
-            if attempt < attempts - 1:
-                get_next_api_key()
-                await asyncio.sleep(0.5) 
-                continue
-            else:
-                # All keys exhausted or broken
-                await message.reply(f"⏳ System overload or limit reached.\nDetails: `{error_str}`", parse_mode="Markdown")
-                return
-        except Exception as e:
-            logging.error(f"Unexpected Pipeline Error: {str(e)}")
-            await message.reply(f"⚠️ Unexpected error occurred:\n`{str(e)}`", parse_mode="Markdown")
+        if response and response.choices:
+            reply_text = response.choices[0].message.content
+            save_to_memory(user_id, "User", user_query)
+            save_to_memory(user_id, "AI", reply_text)
+            await message.reply(reply_text, parse_mode="Markdown")
+            return 
+        else:
+            await message.reply("⚠️ Tizimdan bo'sh javob qaytdi.")
             return
+
+    except Exception as e:
+        logging.error(f"Hugging Face Pipeline Error: {str(e)}")
+        await message.reply(f"⚠️ API Pipeline unexpected error:\n`{str(e)}`", parse_mode="Markdown")
+        return
 
 async def handle_telegram_webhook(request):
     try:
@@ -179,7 +156,6 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     
-    # Keeps the aiohttp web server alive infinitely
     while True:
         await asyncio.sleep(3600)
 
