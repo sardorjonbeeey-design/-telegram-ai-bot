@@ -111,9 +111,10 @@ async def handle_text_message(message: types.Message):
     except ResourceExhausted:
         await message.reply("⏳ API limiti to'ldi. Iltimos, birozdan so'ng qayta urinib ko'ring.")
     except Exception as e:
-        logging.error(f"Gemini Pipeline Error: {str(e)}")
-        await message.reply("⚠️ Xatolik yuz berdi. Birozdan so'ng qayta urinib ko'ring.")
-
+        logging.error(f"Kutilmagan xatolik: {str(e)}")
+            # Umumiy gap o'rniga haqiqiy xatolikni Telegramga chiqaramiz:
+            await message.reply(f"⚠️ Kutilmagan xatolik: `{str(e)}`", parse_mode="Markdown")
+            return
 # Webhook orqali Telegramdan xabarlarni qabul qilish handle'ri
 async def handle_telegram_webhook(request):
     try:
