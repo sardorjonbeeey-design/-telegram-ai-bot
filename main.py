@@ -9,8 +9,8 @@ from aiogram.types import Message
 from typing import Callable, Dict, Any, Awaitable
 import google.generativeai as genai
 import edge_tts
+from aiohttp import web
 from motor.motor_asyncio import AsyncIOMotorClient
-from duckduckgo_search import DDGS
 
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
@@ -25,73 +25,22 @@ history_col = db["history"]
 voice_usage = {}
 VOICE_LIMIT = 20 
 
-import os
-import asyncio
-import logging
-import itertools
-import time
-from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
-from aiogram.filters import Command
-from aiogram.types import Message
-from typing import Callable, Dict, Any, Awaitable
-import google.generativeai as genai
-import edge_tts
-from aiohttp import web  # <--- IMPORT THIS
-from motor.motor_asyncio import AsyncIOMotorClient
-
-# --- CONFIGURATION & SETUP ---
-# ... (Keep all your existing Bot, DP, DB, and GeminiManager setups here)
-
-# --- WEB SERVER SETUP (To stop the Render timeout) ---
-async def health_check(request):
-    return web.Response(text="Bot is running!")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"Web server started on port {port}")
-
-# --- UPDATED MAIN ENTRY POINT ---
-async def main():
-    # 1. Start the web server first (keeps Render happy)
-    await start_web_server()
-    
-    # 2. Start the bot (polling)
-    print("Starting polling...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-async def run_bot():
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-# --- CUSTOM RATE LIMITER (NO EXTERNAL PACKAGE) ---
+# --- MIDDLEWARE & GEMINI ---
 class ThrottlingMiddleware(BaseMiddleware):
     def __init__(self, limit: float = 2.0):
         self.limit = limit
         self.cache = {}
 
-    async def __call__(self, handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]], event: Message, data: Dict[str, Any]) -> Any:
+    async def __call__(self, handler, event, data):
         user_id = event.from_user.id
         now = time.time()
         if now - self.cache.get(user_id, 0) < self.limit:
-            return # Simply ignore spammed messages
+            return
         self.cache[user_id] = now
         return await handler(event, data)
 
 dp.message.middleware(ThrottlingMiddleware(limit=2.0))
 
-# --- GEMINI ROTATOR ---
 class GeminiManager:
     def __init__(self, keys):
         self.keys = itertools.cycle(keys)
@@ -104,39 +53,12 @@ class GeminiManager:
 
 gemini = GeminiManager(GEMINI_KEYS)
 
-SYSTEM_INSTRUCTION = (
-    "Sen Qadamsan, foydalanuvchining eng yaqin, samimiy do'stisan. "
-    "Muloqot uslubing: "
-    "1. Robotcha ohangni butunlay yig'ishtir. 'Siz' deb murojaat qilma, doim 'sen' deb gaplash. "
-    "2. O'zbek tilidagi jonli so'zlashuv uslubini qo'lla (masalan: 'qalay', 'nima gaplar', 'to'g'risi', 'shunaqasi ham bo'ladimi'). "
-    "3. So'zma-so'z tarjima qilma, o'zbekcha hissiyot va mentalitetga mos javob ber. "
-    "4. Javoblaring doimo qisqa, tushunarli va insoniy bo'lsin. Uzun va zerikarli matnlardan qoch. "
-    "5. Agar foydalanuvchi biror xato qilsa yoki g'alati narsa aytsa, do'stona hazil bilan javob ber, lekin o'rgatuvchi ohangda bo'lma."
-)
+SYSTEM_INSTRUCTION = "Sen Qadamsan, foydalanuvchining eng yaqin, samimiy do'stisan. Senlashib gaplash, o'zbekcha jonli so'zlashuv uslubini qo'lla, rasmiyatchilikdan qoch, qisqa va insoniy javob ber."
 
 # --- HANDLERS ---
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
     await msg.reply("Assalomu alaykum! Men Qadamman.")
-
-@dp.message(Command("voice", "ovoz"))
-async def handle_voice(msg: Message):
-    user_id = msg.chat.id
-    if voice_usage.get(user_id, 0) >= VOICE_LIMIT:
-        await msg.reply("Ovozli xabar limiti tugadi. Hozircha faqat matn!")
-        return
-    
-    # Simple context fetch
-    hist_cursor = history_col.find({"user_id": user_id}).sort("_id", -1).limit(1)
-    hist = await hist_cursor.to_list(length=1)
-    text = hist[0]["content"] if hist else "Assalomu alaykum."
-    
-    voice_usage[user_id] = voice_usage.get(user_id, 0) + 1
-    await bot.send_chat_action(msg.chat.id, "record_voice")
-    path = f"voice_{user_id}.mp3"
-    await edge_tts.Communicate(text, "uz-UZ-MadinaNeural").save(path)
-    await msg.reply_voice(voice=types.FSInputFile(path))
-    if os.path.exists(path): os.remove(path)
 
 @dp.message(F.text)
 async def chat(msg: Message):
@@ -153,8 +75,24 @@ async def chat(msg: Message):
         else:
             await msg.reply("Texnik muammo yuz berdi.")
 
+# --- WEB SERVER (For Render) ---
+async def health_check(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+# --- ENTRY POINT ---
 async def main():
-    await dp.start_polling(bot, drop_pending_updates=True)
+    await start_web_server()
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
