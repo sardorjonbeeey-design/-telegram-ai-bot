@@ -39,7 +39,6 @@ dp = Dispatcher()
 SYSTEM_INSTRUCTION = (
     "Sening isming Qadam AI. Sen foydalanuvchi uchun samimiy va ishonchli AI do'st/yordamcisan. "
     "Siyosiy mavzularda betaraf va xolis qol. O'zbekiston qonunchiligi va milliy qadriyatlarga hurmat bilan yondash."
-    "Sen Claude stilidan foydalanasan, doim rost va tog'ri gapirasan, bilsang javob berasan, bilmasang to'g'risini aytasan."
 )
 
 # --- DATABASE HELPERS ---
@@ -81,10 +80,7 @@ async def handle_clear(message: types.Message):
 async def handle_voice(message: types.Message):
     user_id = message.chat.id
     text = message.text.replace("/voice", "").replace("/ovoz", "").strip() or (await get_history_context(user_id))[-1]["content"]
-    
-    # Language detection
     voice = "en-US-EmmaNeural" if any(ord(char) < 128 for char in text) else "uz-UZ-MadinaNeural"
-    
     await bot.send_chat_action(chat_id=user_id, action="record_voice")
     path = f"voice_{user_id}.mp3"
     await edge_tts.Communicate(text, voice).save(path)
@@ -96,7 +92,6 @@ async def handle_image(message: types.Message):
     prompt = message.text.replace("/image", "").strip()
     await bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
     status_msg = await message.reply("🎨 Rasm yaratilmoqda...")
-    
     try:
         img = await asyncio.get_event_loop().run_in_executor(None, lambda: hf_client.text_to_image(prompt, model="black-forest-labs/FLUX.1-schnell"))
         buf = io.BytesIO()
@@ -112,11 +107,9 @@ async def process_chat(message: types.Message):
     if message.text.startswith("/"): return
     if not await check_and_update_limit(message.chat.id, message.from_user.first_name): 
         return await message.reply("Limit tugadi.")
-    
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     msgs = [{"role": "system", "content": SYSTEM_INSTRUCTION}] + await get_history_context(message.chat.id)
     msgs.append({"role": "user", "content": message.text})
-    
     try:
         res = await asyncio.get_event_loop().run_in_executor(None, lambda: hf_client.chat.completions.create(model="meta-llama/Llama-3.3-70B-Instruct", messages=msgs))
         reply = res.choices[0].message.content
@@ -127,44 +120,19 @@ async def process_chat(message: types.Message):
         await message.reply("Kechirasiz, javob olishda xatolik yuz berdi.")
 
 # --- RUNNER ---
-async def start_bot():
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
+async def main():
+    # Setup web server for Render
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="Bot is running"))
     runner = web.AppRunner(app)
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(runner.setup())
+    await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
-    loop.run_until_complete(site.start())
-    loop.run_until_complete(start_bot())
-# --- RUNNER ---
-async def main():
-    # 1. Forcefully tell Telegram to forget ANY previous connections/webhooks
-    # This is the "kill switch" for the 409 Conflict error
-    await bot.delete_webhook(drop_pending_updates=True)
+    await site.start()
     
-    # 2. Start polling and tell it to drop any messages that were waiting
-    # while the bot was offline.
+    # Start bot
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, drop_pending_updates=True)
 
 if __name__ == "__main__":
-    # Start the web server first
-    app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Bot is running"))
-    runner = web.AppRunner(app)
-    
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(runner.setup())
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    loop.run_until_complete(site.start())
-    
-    # Now start the bot with drop_pending_updates=True
-    try:
-        loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())
