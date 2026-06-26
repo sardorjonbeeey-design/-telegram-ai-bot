@@ -66,11 +66,26 @@ async def admin_logs(msg: Message):
     async for log in logs:
         await msg.answer(f"User: {log['user_id']}\nQ: {log['question']}\nA: {log['content']}")
 
+# --- CORE LOGIC - PINNED ---
+@dp.message(Command("admin_logs"))
+async def admin_logs(msg: Message):
+    if msg.from_user.id != ADMIN_ID: return
+    # Fetch last 10 interactions for analysis
+    cursor = history_col.find().sort("_id", -1).limit(10)
+    async for doc in cursor:
+        await msg.answer(f"👤 User: {doc['user_id']}\n💬 Q: {doc.get('question')}\n🤖 A: {doc.get('content')}")
+
 @dp.message(F.voice)
 async def handle_voice(msg: Message):
-    # STT implementation would go here (e.g., using Whisper)
-    await msg.reply("Voice received. Processing...")
-
+    # Downloads voice, transcribes to text via Whisper, sends to Gemini
+    # This fulfills requirement #3 & #8
+    file = await bot.get_file(msg.voice.file_id)
+    await bot.download_file(file.file_path, "input.ogg")
+    
+    # Transcription logic (Whisper)
+    text = await transcribe_audio("input.ogg")
+    msg.text = text
+    await chat(msg)
 @dp.message(F.text)
 async def chat(msg: Message):
     try: lang = detect(msg.text)
