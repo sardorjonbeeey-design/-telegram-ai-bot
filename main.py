@@ -190,7 +190,7 @@ async def handle_image_generation(message: types.Message):
             await message.reply(f"⚠️ Rasmni yaratishda kutilmagan xatolik: `{str(e)}`", parse_mode="Markdown")
             return
 
-# --- FEATURE 4: SPEECH-TO-TEXT VOICE NOTE READING ---
+# --- FEATURE 4: SPEECH-TO-TEXT VOICE NOTE READING WITH FORM DATA FIX ---
 @dp.message(F.voice)
 async def handle_voice_message(message: types.Message):
     user_id = message.chat.id
@@ -201,21 +201,37 @@ async def handle_voice_message(message: types.Message):
     await message.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
 
     try:
+        # Download the voice file from Telegram's servers
         voice_file = await bot.get_file(message.voice.file_id)
         audio_buffer = io.BytesIO()
         await bot.download_file(voice_file.file_path, destination=audio_buffer)
         audio_bytes = audio_buffer.getvalue()
 
-        loop = asyncio.get_event_loop()
-        transcription = await loop.run_in_executor(
-            None,
-            lambda: hf_client.automatic_speech_recognition(audio_bytes, model=WHISPER_MODEL)
-        )
+        logging.info(f"Processing voice note for user {user_id} ({len(audio_bytes)} bytes)")
+
+        # Hit Whisper endpoint directly with FormData to resolve decoding issues
+        API_URL = f"https://api-inference.huggingface.co/models/{WHISPER_MODEL}"
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         
-        user_voice_text = transcription.text.strip() if hasattr(transcription, 'text') else str(transcription).strip()
+        data = aiohttp.FormData()
+        # Explicitly label filename as voice.ogg to trigger Whisper's internal container decoder
+        data.add_field('file', audio_bytes, filename='voice.ogg', content_type='audio/ogg')
+
+        # Use non-blocking async aiohttp directly for audio classification
+        async with aiohttp.ClientSession() as session:
+            async with session.post(API_URL, headers=headers, data=data) as response:
+                if response.status != 200:
+                    raw_err = await response.text()
+                    logging.error(f"Whisper API status error {response.status}: {raw_err}")
+                    await message.reply("⚠️ Ovozli xabarni qayta ishlashda API ulanish xatoligi yuz berdi.")
+                    return
+                
+                result = await response.json()
+                # Serverless transcription return structure can differ slightly
+                user_voice_text = result.get("text", "").strip()
 
         if not user_voice_text:
-            await message.reply("🎙 Ovozli xabarni tushunib bo'lmadi.")
+            await message.reply("🎙 Ovozli xabardan hech qanday matn aniqlanmadi.")
             return
 
         await message.reply(f"📝 *Men eshitgan matn:* _{user_voice_text}_", parse_mode="Markdown")
