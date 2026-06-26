@@ -133,7 +133,7 @@ async def handle_explicit_voice_command(message: types.Message):
         logging.error(f"Explicit Voice Generation Error: {e}")
         await message.reply("⚠️ Ovozli javob tayyorlashda xatolik yuz berdi.")
 
-# --- FEATURE 3: DIRECT IMAGE GENERATION VIA AIOHTTP (/image command) ---
+# --- FEATURE 3: DIRECT IMAGE GENERATION VIA AIOHTTP WITH RETRIES (/image command) ---
 @dp.message(F.text.startswith("/image"))
 async def handle_image_generation(message: types.Message):
     user_id = message.chat.id
@@ -153,29 +153,42 @@ async def handle_image_generation(message: types.Message):
     API_URL = f"https://api-inference.huggingface.co/models/{IMAGE_GEN_MODEL}"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(API_URL, headers=headers, json={"inputs": prompt}) as response:
-                
-                if response.status == 503:
-                    error_data = await response.json()
-                    estimated_time = error_data.get("estimated_time", 20)
-                    await message.reply(f"⏳ Hugging Face serverlari uyg'onmoqda. Iltimos {int(estimated_time)} soniya kuting va qaytadan buyruq bering...")
-                    return
-                
-                if response.status != 200:
-                    raw_err = await response.text()
-                    logging.error(f"HF Image API status error {response.status}: {raw_err}")
-                    await message.reply("⚠️ Rasmni yuklab olishda API xatoligi yuz berdi.")
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(API_URL, headers=headers, json={"inputs": prompt}) as response:
+                    
+                    if response.status == 503:
+                        error_data = await response.json()
+                        estimated_time = error_data.get("estimated_time", 20)
+                        await message.reply(f"⏳ Hugging Face serverlari uyg'onmoqda. Iltimos {int(estimated_time)} soniya kuting va qaytadan buyruq bering...")
+                        return
+                    
+                    if response.status != 200:
+                        raw_err = await response.text()
+                        logging.error(f"HF Image API status error {response.status}: {raw_err}")
+                        await message.reply("⚠️ Rasmni yuklab olishda API xatoligi yuz berdi.")
+                        return
+
+                    image_bytes = await response.read()
+                    photo_file = types.BufferedInputFile(image_bytes, filename="generated_image.png")
+                    await message.reply_photo(photo=photo_file, caption=f"🎨 Sizning so'rovingiz bo'yicha rasm tayyorlandi!")
                     return
 
-                image_bytes = await response.read()
-                photo_file = types.BufferedInputFile(image_bytes, filename="generated_image.png")
-                await message.reply_photo(photo=photo_file, caption=f"🎨 Sizning so'rovingiz bo'yicha rasm tayyorlandi!")
-                
-    except Exception as e:
-        logging.error(f"Image gen block failure: {e}")
-        await message.reply(f"⚠️ Rasmni yaratishda kutilmagan xatolik: `{str(e)}`", parse_mode="Markdown")
+        except (aiohttp.ClientConnectorError, aiohttp.ClientError) as net_err:
+            logging.warning(net_err)
+            if attempt < max_retries - 1:
+                logging.info(f"Network glitch, retrying image generation in 2 seconds... (Attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(2)
+            else:
+                logging.error(f"Image gen network failure after {max_retries} attempts: {net_err}")
+                await message.reply("⚠️ Tarmoq xatoligi yuz berdi. Render serveringiz ulanishni o'rnata olmadi. Bir ozdan so'ng qayta urinib ko'ring.")
+                return
+        except Exception as e:
+            logging.error(f"Image gen block failure: {e}")
+            await message.reply(f"⚠️ Rasmni yaratishda kutilmagan xatolik: `{str(e)}`", parse_mode="Markdown")
+            return
 
 # --- FEATURE 4: SPEECH-TO-TEXT VOICE NOTE READING ---
 @dp.message(F.voice)
