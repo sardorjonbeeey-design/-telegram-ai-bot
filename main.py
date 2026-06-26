@@ -141,3 +141,30 @@ if __name__ == "__main__":
     site = web.TCPSite(runner, '0.0.0.0', port)
     loop.run_until_complete(site.start())
     loop.run_until_complete(start_bot())
+# --- RUNNER ---
+async def main():
+    # 1. Forcefully tell Telegram to forget ANY previous connections/webhooks
+    # This is the "kill switch" for the 409 Conflict error
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    # 2. Start polling and tell it to drop any messages that were waiting
+    # while the bot was offline.
+    await dp.start_polling(bot, drop_pending_updates=True)
+
+if __name__ == "__main__":
+    # Start the web server first
+    app = web.Application()
+    app.router.add_get("/", lambda r: web.Response(text="Bot is running"))
+    runner = web.AppRunner(app)
+    
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(runner.setup())
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    loop.run_until_complete(site.start())
+    
+    # Now start the bot with drop_pending_updates=True
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        pass
