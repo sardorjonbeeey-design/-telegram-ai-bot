@@ -15,7 +15,6 @@ from motor.motor_asyncio import AsyncIOMotorClient
 logging.basicConfig(level=logging.INFO)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 HF_TOKEN = os.environ.get("HF_TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 MONGODB_URI = os.environ.get("MONGODB_URI")
 
 # --- MONGODB CONNECTION ---
@@ -25,7 +24,7 @@ try:
     user, password = user_pass.split(":", 1)
     escaped_uri = f"mongodb+srv://{urllib.parse.quote_plus(user)}:{urllib.parse.quote_plus(password)}@{rest}"
     client = AsyncIOMotorClient(escaped_uri)
-except Exception:
+except:
     client = AsyncIOMotorClient(MONGODB_URI)
 
 db = client["qadam_db"]
@@ -36,10 +35,7 @@ hf_client = InferenceClient(api_key=HF_TOKEN)
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-SYSTEM_INSTRUCTION = (
-    "Sening isming Qadam AI. Sen foydalanuvchi uchun samimiy va ishonchli AI do'st/yordamcisan. "
-    "Siyosiy mavzularda betaraf va xolis qol. O'zbekiston qonunchiligi va milliy qadriyatlarga hurmat bilan yondash."
-)
+SYSTEM_INSTRUCTION = "Sening isming Qadam AI. Sen foydalanuvchi uchun samimiy va ishonchli AI do'st/yordamcisan."
 
 # --- DATABASE HELPERS ---
 async def save_to_memory(user_id, role, content):
@@ -59,30 +55,23 @@ async def check_and_update_limit(user_id, first_name):
         await users_col.insert_one({"user_id": user_id, "first_name": first_name, "usage_date": today, "request_count": 1})
         return True
     if user["usage_date"] != today:
-        await users_col.update_one({"user_id": user_id}, {"$set": {"usage_date": today, "request_count": 1, "first_name": first_name}})
+        await users_col.update_one({"user_id": user_id}, {"$set": {"usage_date": today, "request_count": 1}})
         return True
-    if user["request_count"] >= user.get("custom_limit", 50): return False
-    await users_col.update_one({"user_id": user_id}, {"$inc": {"request_count": 1}, "$set": {"first_name": first_name}})
+    if user["request_count"] >= 50: return False
+    await users_col.update_one({"user_id": user_id}, {"$inc": {"request_count": 1}})
     return True
 
-# --- COMMANDS ---
+# --- BOT COMMANDS & FEATURES ---
 @dp.message(Command("start"))
 async def handle_start(message: types.Message):
-    await message.reply("Assalomu alaykum! Men Qadam — sizning AI yordamchingizman.")
+    await message.reply("Assalomu alaykum! Men Qadam AIman.")
 
-@dp.message(Command("clear"))
-async def handle_clear(message: types.Message):
-    await history_col.delete_many({"user_id": message.chat.id})
-    await message.reply("✅ Suhbat tarixi tozalandi.")
-
-# --- FEATURES ---
 @dp.message(F.text.startswith(("/voice", "/ovoz")))
 async def handle_voice(message: types.Message):
-    user_id = message.chat.id
-    text = message.text.replace("/voice", "").replace("/ovoz", "").strip() or (await get_history_context(user_id))[-1]["content"]
+    text = message.text.replace("/voice", "").replace("/ovoz", "").strip() or (await get_history_context(message.chat.id))[-1]["content"]
     voice = "en-US-EmmaNeural" if any(ord(char) < 128 for char in text) else "uz-UZ-MadinaNeural"
-    await bot.send_chat_action(chat_id=user_id, action="record_voice")
-    path = f"voice_{user_id}.mp3"
+    await bot.send_chat_action(message.chat.id, "record_voice")
+    path = f"voice_{message.chat.id}.mp3"
     await edge_tts.Communicate(text, voice).save(path)
     await message.reply_voice(voice=types.FSInputFile(path))
     os.remove(path)
@@ -90,47 +79,48 @@ async def handle_voice(message: types.Message):
 @dp.message(F.text.startswith("/image"))
 async def handle_image(message: types.Message):
     prompt = message.text.replace("/image", "").strip()
-    await bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
-    status_msg = await message.reply("🎨 Rasm yaratilmoqda...")
+    await bot.send_chat_action(message.chat.id, "upload_photo")
+    status = await message.reply("🎨 Rasm yaratilmoqda...")
     try:
-        img = await asyncio.get_event_loop().run_in_executor(None, lambda: hf_client.text_to_image(prompt, model="black-forest-labs/FLUX.1-schnell"))
+        img = hf_client.text_to_image(prompt, model="black-forest-labs/FLUX.1-schnell")
         buf = io.BytesIO()
         img.save(buf, format='PNG')
         buf.seek(0)
-        await message.reply_photo(photo=types.BufferedInputFile(buf.getvalue(), filename="img.png"))
-        await status_msg.delete()
-    except Exception as e:
-        await status_msg.edit_text("❌ Rasm yaratishda xatolik yuz berdi.")
+        await message.reply_photo(photo=types.BufferedInputFile(buf.getvalue(), "img.png"))
+        await status.delete()
+    except:
+        await status.edit_text("❌ Rasm yaratishda xatolik.")
 
 @dp.message(F.text)
 async def process_chat(message: types.Message):
     if message.text.startswith("/"): return
     if not await check_and_update_limit(message.chat.id, message.from_user.first_name): 
         return await message.reply("Limit tugadi.")
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    await bot.send_chat_action(message.chat.id, "typing")
     msgs = [{"role": "system", "content": SYSTEM_INSTRUCTION}] + await get_history_context(message.chat.id)
     msgs.append({"role": "user", "content": message.text})
+    
     try:
-        res = await asyncio.get_event_loop().run_in_executor(None, lambda: hf_client.chat.completions.create(model="meta-llama/Llama-3.3-70B-Instruct", messages=msgs))
+        res = hf_client.chat.completions.create(model="meta-llama/Llama-3.3-70B-Instruct", messages=msgs)
         reply = res.choices[0].message.content
         await save_to_memory(message.chat.id, "User", message.text)
         await save_to_memory(message.chat.id, "AI", reply)
         await message.reply(reply)
-    except Exception as e:
-        await message.reply("Kechirasiz, javob olishda xatolik yuz berdi.")
+    except:
+        await message.reply("Kechirasiz, xatolik yuz berdi.")
 
-# --- RUNNER ---
-async def main():
-    # Setup web server for Render
+# --- WEB SERVER & RUNNER ---
+async def run_web():
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="Bot is running"))
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
     await site.start()
-    
-    # Start bot
+
+async def main():
+    await run_web()
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, drop_pending_updates=True)
 
