@@ -123,6 +123,35 @@ async def process_chat(message: types.Message, query=None):
     await save_to_memory(message.chat.id, "User", query)
     await save_to_memory(message.chat.id, "AI", reply)
     await message.reply(reply)
+@dp.message(Command("start"))
+async def handle_start(message: types.Message):
+    await message.reply(
+        "Assalomu alaykum! Men Qadam — sizning sun'iy intellekt yordamchingizman. "
+        "Yordam olish uchun /help buyrug'ini yuboring."
+    )
+@dp.message(Command("help"))
+async def handle_help(message: types.Message):
+    help_text = (
+        "🤖 **Qadam AI - Qo'llanma**\n\n"
+        "💬 **Suhbat:** Shunchaki xabar yozing.\n"
+        "🎙 **Ovozli yozuv:** Ovozli xabar yuboring (matnga o'giraman).\n"
+        "🗣 **Ovozli javob:** `/voice matn` yoki `/ovoz matn`.\n"
+        "🎨 **Rasm yaratish:** `/image [tasvir]`.\n"
+        "👁 **Rasm tahlili:** Rasm yuboring (tahlil qilaman).\n"
+        "🧹 **Tarixni tozalash:** `/clear`.\n\n"
+        "ℹ️ *Savollaringiz bo'lsa, betaraf va xolis muloqot qiling.*"
+    )
+    await message.reply(help_text, parse_mode="Markdown")
+@dp.message(Command("clear"))
+async def handle_clear(message: types.Message):
+    user_id = message.chat.id
+    # Deletes all history documents for this specific user in MongoDB
+    result = await history_col.delete_many({"user_id": user_id})
+    
+    await message.reply(
+        "✅ Suhbat tarixi tozalandi. Endi yangi mavzudan boshlashimiz mumkin!"
+    )
+    logging.info(f"User {user_id} cleared their chat history. Deleted {result.deleted_count} records.")
 
 # --- KEEPALIVE & WEBHOOK ---
 async def keep_alive():
