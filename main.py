@@ -177,3 +177,11 @@ async def main():
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    
+    # Keeps the aiohttp web server alive infinitely
+    while True:
+        await asyncio.sleep(3600)
+
+if __name__ == "__main__":
+    asyncio.run(main())
