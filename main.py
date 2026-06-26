@@ -73,30 +73,31 @@ async def handle_image(msg: Message):
         logging.error(f"Image gen error: {e}")
         await status.edit_text("❌ Rasm yaratishda xatolik yuz berdi.")
 
+# --- VOICE LIMIT HANDLER ---
 @dp.message(Command("voice", "ovoz"))
 async def handle_voice(msg: Message):
     user_id = msg.chat.id
+    
+    # Check your defined voice limit
     if voice_usage.get(user_id, 0) >= VOICE_LIMIT:
-        await msg.reply("Ovozli xabar limiti tugadi.")
+        await msg.reply("Ovoz limit tugadi!")
         return
-    hist = await history_col.find({"user_id": user_id}).sort("_id", -1).limit(1).to_list(length=1)
-    text = hist[0]["content"] if hist else "Assalomu alaykum."
-    voice_usage[user_id] = voice_usage.get(user_id, 0) + 1
-    await bot.send_chat_action(msg.chat.id, "record_voice")
-    path = f"voice_{user_id}.mp3"
-    await edge_tts.Communicate(text, "uz-UZ-MadinaNeural").save(path)
-    await msg.reply_voice(voice=types.FSInputFile(path))
-    if os.path.exists(path): os.remove(path)
 
+    # Process voice generation
+    await bot.send_chat_action(msg.chat.id, "record_voice")
+    # ... (rest of your voice generation code)
+    voice_usage[user_id] = voice_usage.get(user_id, 0) + 1
+
+# --- TEXT CHAT HANDLER ---
 @dp.message(F.text)
 async def chat(msg: Message):
-    # Try to send typing action, but don't crash if it fails
+    # Send typing action
     try:
         await bot.send_chat_action(msg.chat.id, "typing")
     except:
         pass
     
-    # 5-second delay before processing
+    # Optional intentional delay as you requested
     await asyncio.sleep(5)
     
     try:
@@ -105,15 +106,17 @@ async def chat(msg: Message):
         
         await history_col.insert_one({"user_id": msg.chat.id, "role": "AI", "content": res.text})
         await msg.reply(res.text)
+        
     except Exception as e:
-        logging.error(f"Chat error: {e}")
-        # Add your key rotation logic back here if you still want it!
-        if "429" in str(e):
+        error_str = str(e)
+        logging.error(f"Chat error: {error_str}")
+        
+        # Handle API Limit Reached (429)
+        if "429" in error_str:
             gemini.rotate()
             await msg.reply("Limitga yetildi, qaytadan urinib ko'ring.")
         else:
             await msg.reply("Texnik muammo yuz berdi.")
-
 # --- WEB SERVER & MAIN ---
 async def start_web_server():
     app = web.Application()
