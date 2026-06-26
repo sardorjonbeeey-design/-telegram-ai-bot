@@ -1,11 +1,8 @@
 aiogram==3.13.1
-pydantic==2.9.2
-pydantic-core==2.23.4
-aiohttp==3.10.5
-huggingface_hub
+google-generativeai>=0.8.4
 edge-tts
 Pillow
 motor
 pymongo
-langdetect
 duckduckgo-search
+aiohttp
