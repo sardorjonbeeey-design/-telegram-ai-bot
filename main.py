@@ -12,6 +12,11 @@ logging.basicConfig(level=logging.INFO)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# Render taqdim etadigan asosiy URL (Masalan: https://telegram-ai-bot-jye1.onrender.com)
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL") 
+
+# Bitta foydalanuvchi kuniga necha marta yoza olishi cheklovi (Tuzatildi)
+DAILY_LIMIT = 50  
 
 # Gemini konfiguratsiyasi
 genai.configure(api_key=GEMINI_API_KEY)
@@ -21,9 +26,6 @@ dp = Dispatcher()
 
 # Har bir foydalanuvchi uchun alohida izolatsiya qilingan xotira muhiti
 CHAT_MEMORY = {}
-
-# Kunlik limit sozlamalari
-# bitta foydalanuvchi kuniga nechta xabar yubora oladi
 USER_USAGE = {}
 
 SYSTEM_INSTRUCTION = (
@@ -35,10 +37,8 @@ SYSTEM_INSTRUCTION = (
     "bo'rttirmang va so'ralmagan holda ortiqcha maqtov yoki xushomad qilmang. "
     "Javoblaringizni maksimal 3-4 gapdan oshirmang. Ortiqcha taxminlar va mubolag'alardan foydalanmang. "
     "Faqat foydalanuvchi aniq so'ragan holdagina ijodiy yoki badiiy uslubda javob bering. "
-    "Javoblaringizni maksimal 3-4 gapdan oshirmang. "
     "Agar foydalanuvchi jiddiy ruhiy holat yoki tibbiy masala haqida yozsa, mutaxassis bilan maslahatlashishni tavsiya qiling."
 )
-
 
 def save_to_memory(user_id, role, content):
     if user_id not in CHAT_MEMORY:
@@ -47,7 +47,6 @@ def save_to_memory(user_id, role, content):
     if len(CHAT_MEMORY[user_id]) > 10:
         CHAT_MEMORY[user_id] = CHAT_MEMORY[user_id][-10:]
 
-
 def get_history_context(user_id):
     if user_id not in CHAT_MEMORY:
         return ""
@@ -55,7 +54,6 @@ def get_history_context(user_id):
     for msg in CHAT_MEMORY[user_id]:
         context += f"{msg['role']}: {msg['content']}\n"
     return context
-
 
 def check_and_update_limit(user_id):
     today = date.today().isoformat()
@@ -68,14 +66,13 @@ def check_and_update_limit(user_id):
     usage["count"] += 1
     return True
 
-
 @dp.message(F.text)
 async def handle_text_message(message: types.Message):
     user_query = message.text.strip()
     user_id = message.chat.id
 
     if user_query == "/start":
-        await message.reply("Qadam faol. Shaxsiy yordamchi rejimida ishga tushirildi. Savolingizni yozishingiz mumkin.")
+        await message.reply("Qadam faol. Shaxsiy yordamchi rejimida Webhook orqali ishga tushirildi. Savolingizni yozishingiz mumkin.")
         return
 
     if user_query == "/clear":
@@ -95,7 +92,8 @@ async def handle_text_message(message: types.Message):
 
     try:
         loop = asyncio.get_event_loop()
-        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        # To'g'ri model nomi o'rnatildi (Tuzatildi)
+        model = genai.GenerativeModel('gemini-2.0-flash')
 
         response = await loop.run_in_executor(
             None,
@@ -111,28 +109,51 @@ async def handle_text_message(message: types.Message):
             await message.reply("⚠️ Sun'iy intellektdan bo'sh xabar qaytdi.")
 
     except ResourceExhausted:
-        await message.reply("⏳ Sizning kunlik limitingiz tugadi. Iltimos, ertaga qayta urinib ko'ring.")
+        await message.reply("⏳ API limiti to'ldi. Iltimos, birozdan so'ng qayta urinib ko'ring.")
     except Exception as e:
         logging.error(f"Gemini Pipeline Error: {str(e)}")
         await message.reply("⚠️ Xatolik yuz berdi. Birozdan so'ng qayta urinib ko'ring.")
 
+# Webhook orqali Telegramdan xabarlarni qabul qilish handle'ri
+async def handle_telegram_webhook(request):
+    try:
+        data = await request.json()
+        update = types.Update(**data)
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+    return web.Response(text="OK")
 
 async def handle_ping(request):
     return web.Response(text="Bot running")
 
+async def on_startup(app):
+    # Telegramga webhook manzilini avtomatik ulaymiz
+    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
+    logging.info(f"Setting webhook to: {webhook_url}")
+    await bot.set_webhook(webhook_url, drop_pending_updates=True)
+
+async def on_shutdown(app):
+    logging.info("Deleting webhook...")
+    await bot.delete_webhook()
 
 async def main():
     app = web.Application()
     app.router.add_get("/", handle_ping)
+    app.router.add_post("/webhook", handle_telegram_webhook)
+    
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-
-    logging.info("Telegram polling boshlanmoqda...")
-    await dp.start_polling(bot)
-
+    
+    # Render serveri uxlab qolmasligi va doimiy ishlashi uchun sikl
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     asyncio.run(main())
