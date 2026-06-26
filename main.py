@@ -45,9 +45,15 @@ SYSTEM_INSTRUCTION = (
 )
 # Ensure this is at the very top of your start-up block
 async def main():
-    # This clears the conflict with old sessions
+    # This is the secret sauce: it clears out any 'zombie' connections
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    # Now start polling
     await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
 # --- DATABASE HELPERS ---
 async def save_to_memory(user_id, role, content):
     await history_col.insert_one({"user_id": user_id, "role": role, "content": content})
