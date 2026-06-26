@@ -7,11 +7,9 @@ import aiohttp
 import urllib.parse
 from datetime import date
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.enums.chat_action import ChatAction
 from aiogram.filters import Command
 from huggingface_hub import InferenceClient
 import edge_tts
-from aiohttp import web
 from motor.motor_asyncio import AsyncIOMotorClient
 
 # --- CONFIGURATION ---
@@ -21,31 +19,17 @@ RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 MONGODB_URI = os.environ.get("MONGODB_URI")
-# --- MONGODB ESCAPING (ROBUST) ---
-# Assuming your MONGODB_URI is: mongodb+srv://username:password@cluster.mongodb.net/db
-# This approach finds the parts by looking for the @ and the : after the protocol
+
+# --- MONGODB CONNECTION ---
 try:
-    # Remove protocol prefix
     clean_uri = MONGODB_URI.replace("mongodb+srv://", "").replace("mongodb://", "")
-    
-    # Split into user:pass and rest
     user_pass, rest = clean_uri.split("@", 1)
     user, password = user_pass.split(":", 1)
-    
-    # Escape
-    escaped_user = urllib.parse.quote_plus(user)
-    escaped_pass = urllib.parse.quote_plus(password)
-    
-    # Rebuild
-    escaped_uri = f"mongodb+srv://{escaped_user}:{escaped_pass}@{rest}"
-    
+    escaped_uri = f"mongodb+srv://{urllib.parse.quote_plus(user)}:{urllib.parse.quote_plus(password)}@{rest}"
     client = AsyncIOMotorClient(escaped_uri)
-    db = client["qadam_db"]
-except Exception as e:
-    logging.error(f"Failed to parse MongoDB URI: {e}")
-    # Fallback to direct connection if splitting fails
+except Exception:
     client = AsyncIOMotorClient(MONGODB_URI)
-    db = client["qadam_db"]
+
 db = client["qadam_db"]
 history_col = db["history"]
 users_col = db["users"]
@@ -59,7 +43,7 @@ SYSTEM_INSTRUCTION = (
     "Siyosiy mavzularda betaraf va xolis qoling. O'zbekiston qonunchiligi va milliy qadriyatlarga hurmat bilan yondashing."
 )
 
-# --- DATABASE ASYNC HELPERS ---
+# --- DATABASE HELPERS ---
 async def save_to_memory(user_id, role, content):
     await history_col.insert_one({"user_id": user_id, "role": role, "content": content})
     if await history_col.count_documents({"user_id": user_id}) > 10:
@@ -83,26 +67,46 @@ async def check_and_update_limit(user_id, first_name):
     await users_col.update_one({"user_id": user_id}, {"$inc": {"request_count": 1}, "$set": {"first_name": first_name}})
     return True
 
-# --- FEATURES & HANDLERS ---
+# --- COMMANDS ---
+@dp.message(Command("start"))
+async def handle_start(message: types.Message):
+    await message.reply("Assalomu alaykum! Men Qadam — sizning AI yordamchingizman. /help orqali yordam oling.")
+
+@dp.message(Command("help"))
+async def handle_help(message: types.Message):
+    await message.reply("🤖 **Qadam AI - Qo'llanma**\n\n"
+                        "💬 Suhbat: shunchaki yozing.\n"
+                        "🎙 Ovozli: yuborsangiz matnga o'giraman.\n"
+                        "🗣 Ovozli javob: /voice [matn].\n"
+                        "🎨 Rasm: /image [matn].\n"
+                        "👁 Rasm tahlili: rasm yuboring.\n"
+                        "🧹 /clear: tarixni tozalash.", parse_mode="Markdown")
+
+@dp.message(Command("clear"))
+async def handle_clear(message: types.Message):
+    await history_col.delete_many({"user_id": message.chat.id})
+    await message.reply("✅ Suhbat tarixi tozalandi.")
+
 @dp.message(F.text.startswith("/admin"))
 async def handle_admin(message: types.Message):
     if message.chat.id != ADMIN_ID: return
     cmd = message.text.split()
     if cmd[0] == "/admin":
         count = await users_col.count_documents({})
-        await message.reply(f"📊 Admin Panel\nTotal Users: {count}")
+        await message.reply(f"📊 Total Users: {count}")
     elif cmd[0] == "/admin_chat":
         res = "📜 History:\n"
         async for row in history_col.find({"user_id": int(cmd[1])}).sort("_id", 1):
             res += f"{row['role']}: {row['content']}\n"
         await message.reply(res[:4000])
 
+# --- FEATURES ---
 @dp.message(F.text.startswith(("/voice", "/ovoz")))
 async def handle_voice(message: types.Message):
     user_id = message.chat.id
     text = message.text.replace("/voice", "").replace("/ovoz", "").strip() or (await get_history_context(user_id))[-1]["content"]
     path = f"voice_{user_id}.mp3"
-    voice = "en-US-EmmaNeural" if len(re.findall(r'\b(the|is|are|you)\b', text.lower())) >= 1 else "uz-UZ-MadinaNeural"
+    voice = "uz-UZ-MadinaNeural"
     await edge_tts.Communicate(text, voice).save(path)
     await message.reply_voice(voice=types.FSInputFile(path))
     os.remove(path)
@@ -135,7 +139,6 @@ async def process_chat(message: types.Message, query=None):
     query = query or message.text
     if query.startswith("/"): return
     if not await check_and_update_limit(message.chat.id, message.from_user.first_name): return await message.reply("Limit tugadi.")
-    
     msgs = [{"role": "system", "content": SYSTEM_INSTRUCTION}] + await get_history_context(message.chat.id)
     msgs.append({"role": "user", "content": query})
     res = await asyncio.get_event_loop().run_in_executor(None, lambda: hf_client.chat.completions.create(model="meta-llama/Llama-3.3-70B-Instruct", messages=msgs))
@@ -143,37 +146,8 @@ async def process_chat(message: types.Message, query=None):
     await save_to_memory(message.chat.id, "User", query)
     await save_to_memory(message.chat.id, "AI", reply)
     await message.reply(reply)
-@dp.message(Command("start"))
-async def handle_start(message: types.Message):
-    await message.reply(
-        "Assalomu alaykum! Men Qadam — sizning sun'iy intellekt yordamchingizman. "
-        "Yordam olish uchun /help buyrug'ini yuboring."
-    )
-@dp.message(Command("help"))
-async def handle_help(message: types.Message):
-    help_text = (
-        "🤖 **Qadam AI - Qo'llanma**\n\n"
-        "💬 **Suhbat:** Shunchaki xabar yozing.\n"
-        "🎙 **Ovozli yozuv:** Ovozli xabar yuboring (matnga o'giraman).\n"
-        "🗣 **Ovozli javob:** `/voice matn` yoki `/ovoz matn`.\n"
-        "🎨 **Rasm yaratish:** `/image [tasvir]`.\n"
-        "👁 **Rasm tahlili:** Rasm yuboring (tahlil qilaman).\n"
-        "🧹 **Tarixni tozalash:** `/clear`.\n\n"
-        "ℹ️ *Savollaringiz bo'lsa, betaraf va xolis muloqot qiling.*"
-    )
-    await message.reply(help_text, parse_mode="Markdown")
-@dp.message(Command("clear"))
-async def handle_clear(message: types.Message):
-    user_id = message.chat.id
-    # Deletes all history documents for this specific user in MongoDB
-    result = await history_col.delete_many({"user_id": user_id})
-    
-    await message.reply(
-        "✅ Suhbat tarixi tozalandi. Endi yangi mavzudan boshlashimiz mumkin!"
-    )
-    logging.info(f"User {user_id} cleared their chat history. Deleted {result.deleted_count} records.")
 
-# --- KEEPALIVE & WEBHOOK ---
+# --- RUNNER ---
 async def keep_alive():
     async with aiohttp.ClientSession() as session:
         while True:
@@ -181,12 +155,6 @@ async def keep_alive():
             except: pass
             await asyncio.sleep(300)
 
-async def handle_webhook(request):
-    await dp.feed_update(bot, types.Update(**(await request.json())))
-    return web.Response(text="OK")
-
 if __name__ == "__main__":
-    app = web.Application()
-    app.router.add_post("/webhook", handle_webhook)
-    app.on_startup.append(lambda app: asyncio.create_task(keep_alive()))
-    web.run_app(app, port=int(os.environ.get("PORT", 10000)))
+    asyncio.create_task(keep_alive())
+    dp.run_polling(bot)
