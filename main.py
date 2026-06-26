@@ -75,9 +75,13 @@ async def handle_voice(msg: types.Message):
     if not text:
         hist = await get_history_context(msg.chat.id)
         text = hist[-1]["content"] if hist else "Assalomu alaykum."
+
+    # SMART KEYWORD DETECTION
+    # If it contains specific English common words, use Emma. Otherwise, Madina.
+    english_keywords = ["hello", "hi", "what", "how", "the", "you", "is", "name"]
+    is_english = any(word in text.lower() for word in english_keywords)
     
-    eng_chars = sum(1 for c in text if 'a' <= c.lower() <= 'z')
-    voice = "en-US-EmmaNeural" if (len(text) > 0 and eng_chars / len(text) > 0.4) else "uz-UZ-MadinaNeural"
+    voice = "en-US-EmmaNeural" if is_english else "uz-UZ-MadinaNeural"
     
     await bot.send_chat_action(msg.chat.id, "record_voice")
     path = f"voice_{msg.chat.id}.mp3"
