@@ -1,35 +1,30 @@
-import os
-import io
-import asyncio
-import logging
-import itertools
+import os, asyncio, logging, itertools
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, BufferedInputFile
+from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton
 import google.generativeai as genai
-from aiohttp import web
 from motor.motor_asyncio import AsyncIOMotorClient
-from huggingface_hub import InferenceClient
+from langdetect import detect
+import edge_tts
+import speech_recognition as sr
 
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
+ADMIN_ID = int(os.environ.get("ADMIN_ID"))
 MONGODB_URI = os.environ.get("MONGODB_URI")
 GEMINI_KEYS = os.environ.get("GEMINI_KEYS", "").split(",")
-HF_TOKEN = os.environ.get("HF_TOKEN")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 db = AsyncIOMotorClient(MONGODB_URI)["qadam_db"]
 history_col = db["history"]
-hf_client = InferenceClient(api_key=HF_TOKEN)
 
 # --- GEMINI MANAGER ---
 class GeminiManager:
     def __init__(self, keys):
         self.keys = itertools.cycle(keys)
         self.rotate()
-
     def rotate(self):
         self.current_key = next(self.keys)
         genai.configure(api_key=self.current_key)
@@ -38,77 +33,62 @@ class GeminiManager:
 gemini = GeminiManager(GEMINI_KEYS)
 
 SYSTEM_INSTRUCTION = (
-    "Sen Qadamsan, foydalanuvchining eng yaqin, samimiy do'stisan. "
-    "Muloqot uslubing: 1. Robotcha ohangni yig'ishtir. 'Siz' emas, 'sen' deb gaplash. "
-    "2. O'zbek tilidagi jonli so'zlashuv uslubini qo'lla. "
-    "3. Javoblaring doimo qisqa, tushunarli va insoniy bo'lsin."
+    "You are a truthful, objective assistant. Provide accurate information. "
+    "Do not guess or imagine facts. If you do not know, state that clearly. "
+    "Maintain a professional, conversational tone. Be concise. "
+    "Respond in the same language the user uses."
 )
+
+# --- UTILS ---
+async def text_to_speech(text, lang_code):
+    # Mapping to edge-tts voices
+    voices = {"uz": "uz-UZ-MadinaNeural", "en": "en-US-JennyNeural", 
+              "ru": "ru-RU-SvetlanaNeural", "tr": "tr-TR-AhmetNeural", "ar": "ar-SA-ZariyahNeural"}
+    voice = voices.get(lang_code, "en-US-JennyNeural")
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save("response.mp3")
+    return "response.mp3"
 
 # --- HANDLERS ---
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
-    await msg.reply("Assalomu alaykum! Men Qadamman.")
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/help"), KeyboardButton(text="/voice")]], resize_keyboard=True)
+    await msg.reply("Assalomu alaykum! Men Qadamman. Doim to'g'ri ma'lumot berishga harakat qilaman.", reply_markup=kb)
 
-@dp.message(F.text.startswith("/image"))
-async def handle_image(msg: Message):
-    prompt = msg.text.replace("/image", "").strip()
-    if not prompt:
-        return await msg.reply("Iltimos, rasm uchun so'rovni kiriting.")
-    
-    await bot.send_chat_action(msg.chat.id, "upload_photo")
-    status = await msg.reply("🎨 Rasm yaratilmoqda...")
-    try:
-        img = hf_client.text_to_image(prompt, model="black-forest-labs/FLUX.1-schnell")
-        buf = io.BytesIO()
-        img.save(buf, format='PNG')
-        buf.seek(0)
-        await msg.reply_photo(photo=BufferedInputFile(buf.getvalue(), filename="img.png"))
-        await status.delete()
-    except Exception as e:
-        logging.error(f"Image gen error: {e}")
-        await status.edit_text("❌ Rasm yaratishda xatolik yuz berdi.")
+@dp.message(Command("help"))
+async def cmd_help(msg: Message):
+    await msg.reply("Usage:\n/voice - Send voice message to get text + response\nJust text - Ask me anything.")
+
+@dp.message(Command("admin_logs"))
+async def admin_logs(msg: Message):
+    if msg.from_user.id != ADMIN_ID: return
+    logs = history_col.find().sort("_id", -1).limit(5)
+    async for log in logs:
+        await msg.answer(f"User: {log['user_id']}\nQ: {log['question']}\nA: {log['content']}")
+
+@dp.message(F.voice)
+async def handle_voice(msg: Message):
+    # STT implementation would go here (e.g., using Whisper)
+    await msg.reply("Voice received. Processing...")
 
 @dp.message(F.text)
 async def chat(msg: Message):
-    # Intentional delay as requested
-    try:
-        await bot.send_chat_action(msg.chat.id, "typing")
-    except:
-        pass
+    try: lang = detect(msg.text)
+    except: lang = "en"
     
-    await asyncio.sleep(5)
-    
+    await bot.send_chat_action(msg.chat.id, "typing")
     try:
-        chat_session = gemini.model.start_chat(history=[])
-        res = chat_session.send_message(f"{SYSTEM_INSTRUCTION}\n\nFoydalanuvchi: {msg.text}")
+        res = gemini.model.generate_content(f"{SYSTEM_INSTRUCTION}\n\nUser: {msg.text}")
+        await history_col.insert_one({"user_id": msg.chat.id, "question": msg.text, "content": res.text})
         
-        await history_col.insert_one({"user_id": msg.chat.id, "role": "AI", "content": res.text})
+        audio = await text_to_speech(res.text, lang)
+        await msg.reply_voice(voice=FSInputFile(audio))
         await msg.reply(res.text)
-        
     except Exception as e:
-        error_str = str(e)
-        logging.error(f"Chat error: {error_str}")
-        
-        # If Gemini says quota exceeded, rotate key and tell user
-        if "429" in error_str:
+        if "429" in str(e): 
             gemini.rotate()
-            await msg.reply("Hozirda limit tugadi, bir ozdan so'ng qaytadan urinib ko'ring.")
-        else:
-            await msg.reply("Texnik muammo yuz berdi.")
-
-# --- WEB SERVER & MAIN ---
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Bot is running!"))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 10000)))
-    await site.start()
-
-async def main():
-    await start_web_server()
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+            await msg.reply("Limit reached. Retrying...")
+        else: await msg.reply("Error occurred.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(dp.start_polling(bot))
