@@ -100,16 +100,25 @@ async def handle_msg(msg: Message):
 
 # --- WEBHOOK & MAIN ---
 async def main():
-    webhook_url = f"https://{os.environ['RENDER_EXTERNAL_URL']}/webhook"
-    await bot.set_webhook(webhook_url)
-
+    # 1. Portni olish (Render portni avtomatik beradi)
+    port = int(os.environ.get("PORT", 8080))
+    
+    # 2. Web serverni darhol ishga tushirish
     app = web.Application()
     app.router.add_post("/webhook", lambda req: dp.feed_webhook(bot, req))
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8080)))
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    await asyncio.Event().wait()
+    logging.info(f"Web server port {port} da ishga tushdi.")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # 3. Webhook'ni sozlash (URL ni tekshirish)
+    external_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if not external_url:
+        raise ValueError("RENDER_EXTERNAL_URL muhit o'zgaruvchisi topilmadi!")
+    
+    webhook_url = f"{external_url}/webhook"
+    await bot.set_webhook(webhook_url)
+    logging.info(f"Webhook {webhook_url} ga sozlandi.")
+
+    await asyncio.Event().wait()
