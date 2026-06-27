@@ -1,5 +1,5 @@
 import os, asyncio, logging, itertools, uuid
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile
 from aiohttp import web
@@ -72,21 +72,20 @@ async def cmd_stats(msg: Message):
 @dp.message(F.text & ~F.command)
 async def handle_msg(msg: Message):
     text = msg.text.strip()
-    lang = "en" if "en" in detect(text) else "uz"
-    prompt = f"{EN_SYSTEM if lang == 'en' else UZ_SYSTEM}\n\nUser: {text}"
+    try: lang = "en" if "en" in detect(text) else "uz"
+    except: lang = "uz"
     
+    prompt = f"{EN_SYSTEM if lang == 'en' else UZ_SYSTEM}\n\nUser: {text}"
     wait_msg = await msg.answer("⏳")
+    
     try:
         reply = await gemini.generate(prompt)
-        
-        # History update
         await history_col.update_one(
             {"_id": str(msg.from_user.id)},
             {"$push": {"messages": {"$each": [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]}, "$slice": -20}},
             upsert=True
         )
 
-        # TTS
         name = f"voice_{uuid.uuid4().hex[:8]}.mp3"
         comm = edge_tts.Communicate(reply, VOICE_MAP.get(lang, "uz-UZ-MadinaNeural"))
         await comm.save(name)
@@ -99,47 +98,31 @@ async def handle_msg(msg: Message):
         logging.error(f"Error: {e}")
 
 # --- WEBHOOK & MAIN ---
-# Webhook uchun yangi handler
-async def on_startup(bot: Bot):
-    external_url = os.environ.get("RENDER_EXTERNAL_URL")
-    await bot.set_webhook(f"{external_url}/webhook")
-    
-async def handle_root(request):
-    return web.Response(text="Bot is running!")
-
-app = web.Application()
-app.router.add_get("/", handle_root)  # Render uchun javob
-app.router.add_post("/webhook", webhook_handler) # Telegram uchun webhook
-
-from aiogram import types
-
 async def webhook_handler(request):
     try:
         data = await request.json()
-        update = types.Update(**data)
-        await dp.feed_webhook(bot, update)
+        await dp.feed_webhook(bot, types.Update(**data))
         return web.Response(text="OK")
     except Exception as e:
-        logging.error(f"Xatolik: {e}")
-        return web.Response(status=200) # Telegram qayta urinmasligi uchun 200 qaytaring
-    
-    data = await request.json()
-    update = types.Update(**data)
-    await dp.feed_webhook(bot, update)
-    return web.Response(text="OK")
+        logging.error(f"Webhook error: {e}")
+        return web.Response(status=200)
 
-# main funksiyasini yangilash
+async def handle_root(request):
+    return web.Response(text="Bot is running!")
+
 async def main():
     port = int(os.environ.get("PORT", 8080))
     app = web.Application()
-    app.router.add_post(f"/webhook", webhook_handler) # Tokenli yo'l xavfsizroq
+    app.router.add_get("/", handle_root)
+    app.router.add_post("/webhook", webhook_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     
-    await on_startup(bot)
+    external_url = os.environ.get("RENDER_EXTERNAL_URL")
+    await bot.set_webhook(f"{external_url}/webhook")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
