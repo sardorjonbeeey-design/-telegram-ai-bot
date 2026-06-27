@@ -100,19 +100,19 @@ async def handle_msg(msg: Message):
 
 # --- WEBHOOK & MAIN ---
 async def main():
-    # 1. Portni olish (Render portni avtomatik beradi)
+    # 1. Portni aniqlash
     port = int(os.environ.get("PORT", 8080))
     
-    # 2. Web serverni darhol ishga tushirish
+    # 2. Web serverni ishga tushirish (Render portni band qilishi uchun)
     app = web.Application()
     app.router.add_post("/webhook", lambda req: dp.feed_webhook(bot, req))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"Web server port {port} da ishga tushdi.")
+    logging.info(f"Server {port} portida ishga tushdi.")
 
-    # 3. Webhook'ni sozlash (URL ni tekshirish)
+    # 3. Webhook'ni sozlash
     external_url = os.environ.get("RENDER_EXTERNAL_URL")
     if not external_url:
         raise ValueError("RENDER_EXTERNAL_URL muhit o'zgaruvchisi topilmadi!")
@@ -121,4 +121,8 @@ async def main():
     await bot.set_webhook(webhook_url)
     logging.info(f"Webhook {webhook_url} ga sozlandi.")
 
+    # 4. Asosiy blokirovka (server to'xtab qolmasligi uchun)
     await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
