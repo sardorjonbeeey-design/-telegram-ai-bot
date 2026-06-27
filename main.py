@@ -103,6 +103,13 @@ async def handle_msg(msg: Message):
 async def on_startup(bot: Bot):
     external_url = os.environ.get("RENDER_EXTERNAL_URL")
     await bot.set_webhook(f"{external_url}/webhook")
+    
+async def handle_root(request):
+    return web.Response(text="Bot is running!")
+
+app = web.Application()
+app.router.add_get("/", handle_root)  # Render uchun javob
+app.router.add_post("/webhook", webhook_handler) # Telegram uchun webhook
 
 async def webhook_handler(request):
     url = str(request.url)
