@@ -1,4 +1,4 @@
-import os, asyncio, logging, itertools
+import os, asyncio, logging, itertools, uuid
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton
@@ -33,26 +33,37 @@ class GeminiManager:
 gemini = GeminiManager(GEMINI_KEYS)
 
 SYSTEM_INSTRUCTION = (
-    "Sen — loʻnda va aniq javob beradigan oʻzbek AI yordamchisan.
-
-QOIDALAR:
-- Til: faqat oʻzbek (lotin). Rus/ingliz/krill aralashsa — toʻgʻrilab yoz.
-- Uzunlik: 1-4 gap. Kerak boʻlsa roʻyxat yoki table.
-- Uslub: birinchi gapda mohiyat. Suv, "hozir…", "keling…" larsiz.
-- Bilmasang — "Buni bilmayman" deb ayt. Uydirma yoʻq.
-- Foydalanuvchi tarixidan kelib chiq, lekin takrorlama.
-- Har bir javobda yangi narsa bor. Format — oddiy matn.
-"
+    "Sen — loʻnda va aniq javob beradigan oʻzbek AI yordamchisan. "
+    "QOIDALAR: "
+    "1. Til: faqat oʻzbek (lotin). Rus/ingliz/krill aralashsa — toʻgʻrilab yoz. "
+    "2. Uzunlik: 1-4 gap. Kerak boʻlsa roʻyxat yoki table. "
+    "3. Uslub: birinchi gapda mohiyat. Suv, 'hozir…', 'keling…' larsiz. "
+    "4. Bilmasang — 'Buni bilmayman' deb ayt. Uydirma yoʻq. "
+    "5. Foydalanuvchi tarixidan kelib chiq, lekin takrorlama. "
+    "6. Har bir javobda yangi narsa bor. Format — oddiy matn."
 )
 
 # --- UTILS ---
-async def text_to_speech(text, lang_code):
-    voices = {"uz": "uz-UZ-MadinaNeural", "en": "en-US-JennyNeural", 
-              "ru": "ru-RU-SvetlanaNeural", "tr": "tr-TR-AhmetNeural", "ar": "ar-SA-ZariyahNeural"}
+async def text_to_speech(text: str, lang_code: str) -> str:
+    voices = {
+        "uz": "uz-UZ-MadinaNeural",
+        "en": "en-US-JennyNeural",
+        "ru": "ru-RU-SvetlanaNeural",
+        "tr": "tr-TR-AhmetNeural",
+        "ar": "ar-SA-ZariyahNeural"
+    }
     voice = voices.get(lang_code, "en-US-JennyNeural")
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save("response.mp3")
-    return "response.mp3"
+    filename = f"response_{uuid.uuid4().hex[:8]}.mp3"
+
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(filename)
+        return filename
+    except Exception:
+        # fallback: inglizcha ovoz
+        communicate = edge_tts.Communicate(text, "en-US-JennyNeural")
+        await communicate.save(filename)
+        return filename
 
 # --- HANDLERS ---
 @dp.message(Command("start"))
@@ -71,17 +82,27 @@ async def admin_logs(msg: Message):
     async for doc in cursor:
         await msg.answer(f"👤 User: {doc['user_id']}\n💬 Q: {doc.get('question')}\n🤖 A: {doc.get('content')}")
 
+@dp.message(F.voice)
+async def handle_voice(msg: Message):
+    # Note: Requires a transcription service integration here
+    await msg.reply("Voice received.")
+
 @dp.message(F.text)
 async def chat(msg: Message):
     try: lang = detect(msg.text)
-    except: lang = "en"
+    except: lang = "uz"
+    
     await bot.send_chat_action(msg.chat.id, "typing")
     try:
         res = gemini.model.generate_content(f"{SYSTEM_INSTRUCTION}\n\nUser: {msg.text}")
         await history_col.insert_one({"user_id": msg.chat.id, "question": msg.text, "content": res.text})
+        
         audio = await text_to_speech(res.text, lang)
         await msg.reply_voice(voice=FSInputFile(audio))
         await msg.reply(res.text)
+        
+        # Cleanup file after sending
+        if os.path.exists(audio): os.remove(audio)
     except Exception as e:
         if "429" in str(e): 
             gemini.rotate()
