@@ -99,29 +99,35 @@ async def handle_msg(msg: Message):
         logging.error(f"Error: {e}")
 
 # --- WEBHOOK & MAIN ---
-async def main():
-    # 1. Portni aniqlash
-    port = int(os.environ.get("PORT", 8080))
+# Webhook uchun yangi handler
+async def on_startup(bot: Bot):
+    external_url = os.environ.get("RENDER_EXTERNAL_URL")
+    await bot.set_webhook(f"{external_url}/webhook")
+
+async def webhook_handler(request):
+    url = str(request.url)
+    index = url.rfind("/")
+    token = url[index+1:]
+    if token != TOKEN:
+        return web.Response(status=403)
     
-    # 2. Web serverni ishga tushirish (Render portni band qilishi uchun)
+    data = await request.json()
+    update = types.Update(**data)
+    await dp.feed_webhook(bot, update)
+    return web.Response(text="OK")
+
+# main funksiyasini yangilash
+async def main():
+    port = int(os.environ.get("PORT", 8080))
     app = web.Application()
-    app.router.add_post("/webhook", lambda req: dp.feed_webhook(bot, req))
+    app.router.add_post(f"/webhook", webhook_handler) # Tokenli yo'l xavfsizroq
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"Server {port} portida ishga tushdi.")
-
-    # 3. Webhook'ni sozlash
-    external_url = os.environ.get("RENDER_EXTERNAL_URL")
-    if not external_url:
-        raise ValueError("RENDER_EXTERNAL_URL muhit o'zgaruvchisi topilmadi!")
     
-    webhook_url = f"{external_url}/webhook"
-    await bot.set_webhook(webhook_url)
-    logging.info(f"Webhook {webhook_url} ga sozlandi.")
-
-    # 4. Asosiy blokirovka (server to'xtab qolmasligi uchun)
+    await on_startup(bot)
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
