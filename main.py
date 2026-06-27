@@ -22,40 +22,35 @@ history_col = db["history"]
 
 # --- GEMINI MANAGER ---
 class GeminiManager:
-    def __init__(self, api_keys: list[str]):
+    def init(self, api_keys: list[str]):
         self.keys = itertools.cycle(api_keys)
         self.current_key = next(self.keys)
+        self._configure()
+
+    def _configure(self):
         genai.configure(api_key=self.current_key)
         self.model = genai.GenerativeModel("gemini-2.0-flash")
+        logging.info(f"Gemini with key: {self.current_key[:8]}...")
 
-    def _rotate(self):
+    def rotate(self):
         self.current_key = next(self.keys)
-        genai.configure(api_key=self.current_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
-        logging.info(f"Rotated to key: {self.current_key[:8]}...")
+        self._configure()
 
-    async def generate(self, prompt: list) -> str:
+    async def generate(self, prompt: str | list) -> str:
         for attempt in range(len(self.keys)):
             try:
                 resp = await self.model.generate_content_async(prompt)
                 return resp.text.strip()
             except Exception as e:
-                logging.warning(f"Key failed: {e}")
-                self._rotate()
-        raise Exception("All keys exhausted")
+                logging.warning(f"Key {self.current_key[:8]} failed: {e}")
+                self.rotate()
+                await asyncio.sleep(1)
+        raise Exception("All Gemini keys exhausted")
 
 gemini = GeminiManager(GEMINI_KEYS)
 
-
 SYSTEM_INSTRUCTION = (
-    "Sen — loʻnda va aniq javob beradigan oʻzbek AI yordamchisan. "
-    "QOIDALAR: "
-    "1. Til: faqat oʻzbek (lotin). Rus/ingliz/krill aralashsa — toʻgʻrilab yoz. "
-    "2. Uzunlik: 1-4 gap. Kerak boʻlsa roʻyxat yoki table. "
-    "3. Uslub: birinchi gapda mohiyat. Suv, 'hozir…', 'keling…' larsiz. "
-    "4. Bilmasang — 'Buni bilmayman' deb ayt. Uydirma yoʻq. "
-    "5. Foydalanuvchi tarixidan kelib chiq, lekin takrorlama. "
-    "6. Har bir javobda yangi narsa bor. Format — oddiy matn."
+    "  "
 )
 
 # --- UTILS ---
