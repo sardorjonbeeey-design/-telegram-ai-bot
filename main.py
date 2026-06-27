@@ -22,15 +22,30 @@ history_col = db["history"]
 
 # --- GEMINI MANAGER ---
 class GeminiManager:
-    def __init__(self, keys):
-        self.keys = itertools.cycle(keys)
-        self.rotate()
-    def rotate(self):
+    def __init__(self, api_keys: list[str]):
+        self.keys = itertools.cycle(api_keys)
         self.current_key = next(self.keys)
         genai.configure(api_key=self.current_key)
         self.model = genai.GenerativeModel("gemini-2.0-flash")
 
+    def _rotate(self):
+        self.current_key = next(self.keys)
+        genai.configure(api_key=self.current_key)
+        self.model = genai.GenerativeModel("gemini-2.0-flash")
+        logging.info(f"Rotated to key: {self.current_key[:8]}...")
+
+    async def generate(self, prompt: list) -> str:
+        for attempt in range(len(self.keys)):
+            try:
+                resp = await self.model.generate_content_async(prompt)
+                return resp.text.strip()
+            except Exception as e:
+                logging.warning(f"Key failed: {e}")
+                self._rotate()
+        raise Exception("All keys exhausted")
+
 gemini = GeminiManager(GEMINI_KEYS)
+
 
 SYSTEM_INSTRUCTION = (
     "Sen — loʻnda va aniq javob beradigan oʻzbek AI yordamchisan. "
@@ -68,60 +83,128 @@ async def text_to_speech(text: str, lang_code: str) -> str:
 # --- HANDLERS ---
 @dp.message(Command("start"))
 async def cmd_start(msg: Message):
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/help"), KeyboardButton(text="/voice")]], resize_keyboard=True)
-    await msg.reply("Assalomu alaykum! Men Qadamman. Doim to'g'ri ma'lumot berishga harakat qilaman.", reply_markup=kb)
+    await msg.answer("Salom! Men oʻzbek AI yordamchiman. Savol yozing.")
 
-@dp.message(Command("help"))
-async def cmd_help(msg: Message):
-    await msg.reply("Usage:\n/voice - Send voice message to get text + response\nJust text - Ask me anything.")
+@dp.message(Command("clear"))
+async def cmd_clear(msg: Message):
+    await history_col.delete_one({"_id": str(msg.from_user.id)})
+    await msg.answer("Xotira tozalandi.")
 
-@dp.message(Command("admin_logs"))
-async def admin_logs(msg: Message):
-    if msg.from_user.id != ADMIN_ID: return
-    cursor = history_col.find().sort("_id", -1).limit(10)
-    async for doc in cursor:
-        await msg.answer(f"👤 User: {doc['user_id']}\n💬 Q: {doc.get('question')}\n🤖 A: {doc.get('content')}")
+@dp.message(Command("stats"))
+async def cmd_stats(msg: Message):
+    if msg.from_user.id != ADMIN_ID:
+        return await msg.reply("❌ Faqat admin uchun")
 
-@dp.message(F.voice)
-async def handle_voice(msg: Message):
-    # Note: Requires a transcription service integration here
-    await msg.reply("Voice received.")
+    args = msg.text.split(maxsplit=1)
 
-@dp.message(F.text)
+    # ─── Umumiy stat ──────────────────────────────────────
+    if len(args) == 1:
+        total = await history_col.count_documents({})
+        text = f"📊 **Foydalanuvchilar:** {total}\n\n"
+
+        cursor = history_col.find().sort("_id", 1).limit(30)
+        async for user in cursor:
+            uid = user["_id"]
+            msgs = user.get("messages", [])
+            last = msgs[-2:] if msgs else []
+            text += f"`{uid}` — {len(msgs)} ta xabar\n"
+            for m in last:
+                role = "👤" if m["role"] == "user" else "🤖"
+                content = m["content"][:80] + ("…" if len(m["content"]) > 80 else "")
+                text += f"  {role} {content}\n"
+            text += "\n"
+
+        await msg.reply(text, parse_mode="Markdown")
+
+    # ─── Aniq user ────────────────────────────────────────
+    else:
+        try:
+            target = int(args[1])
+        except ValueError:
+            return await msg.reply("❌ Noto'g'ri ID. Raqam kiriting.")
+
+        user = await history_col.find_one({"_id": target})
+        if not user:
+            return await msg.reply(f"❌ `{target}` topilmadi")
+
+        msgs = user.get("messages", [])
+        text = f"📋 **{target}** — {len(msgs)} ta xabar\n\n"
+        for m in msgs[-40:]:  # oxirgi 40 ta
+            role = "👤" if m["role"] == "user" else "🤖"
+            content = m["content"][:200] + ("…" if len(m["content"]) > 200 else "")
+            text += f"{role} {content}\n\n"
+
+        # agar juda uzun bo'lsa, faylga yoz
+        if len(text) > 4000:
+            with open(f"stats_{target}.txt", "w") as f:
+                f.write(text)
+            await msg.reply_document(FSInputFile(f"stats_{target}.txt"))
+            os.remove(f"stats_{target}.txt")
+        else:
+            await msg.reply(text, parse_mode="Markdown")
+
+@dp.message(F.text & ~F.command)
 async def chat(msg: Message):
-    try: lang = detect(msg.text)
-    except: lang = "uz"
-    
-    await bot.send_chat_action(msg.chat.id, "typing")
     try:
-        res = gemini.model.generate_content(f"{SYSTEM_INSTRUCTION}\n\nUser: {msg.text}")
-        await history_col.insert_one({"user_id": msg.chat.id, "question": msg.text, "content": res.text})
-        
-        audio = await text_to_speech(res.text, lang)
-        await msg.reply_voice(voice=FSInputFile(audio))
-        await msg.reply(res.text)
-        
-        # Cleanup file after sending
-        if os.path.exists(audio): os.remove(audio)
-    except Exception as e:
-        if "429" in str(e): 
-            gemini.rotate()
-            await msg.reply("Limit reached. Retrying...")
-        else: await msg.reply("Error occurred.")
+        lang = detect(msg.text)
+    except:
+        lang = "uz"
 
+    await bot.send_chat_action(msg.chat.id, "typing")
+
+    # History dan context yuklash
+    user_data = await history_col.find_one({"_id": msg.chat.id})
+    history = user_data.get("messages", []) if user_data else []
+    context = "\n".join(f"{m['role']}: {m['content']}" for m in history[-6:])
+    prompt = f"{SYSTEM_INSTRUCTION}\n\n{context}\nuser: {msg.text}\nassistant:"
+
+    try:
+        res = gemini.model.generate_content(prompt)
+
+        # History ga saqlash
+        await history_col.update_one(
+            {"_id": msg.chat.id},
+            {"$push": {"messages": {"$each": [
+                {"role": "user", "content": msg.text},
+                {"role": "assistant", "content": res.text}
+            ]}, "$slice": -20}},
+            upsert=True
+        )
+
+        # TTS + voice
+        audio = await text_to_speech(res.text, lang if lang in VOICES else "uz")
+        await msg.reply_voice(voice=FSInputFile(audio), caption=res.text)
+
+        if os.path.exists(audio):
+            os.remove(audio)
+
+    except Exception as e:
+        if "429" in str(e):
+            gemini.rotate()
+            await asyncio.sleep(1)
+            # qayta urinish — ixtiyoriy
+        await msg.reply("Xatolik. Iltimos, qayta yozing.")
+
+# --- WEB SERVER & MAIN ---
 # --- WEB SERVER & MAIN ---
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", lambda r: web.Response(text="Bot is running!"))
     runner = web.AppRunner(app)
     await runner.setup()
+    # Render avtomatik beradigan portni olamiz
     port = int(os.environ.get("PORT", 10000))
-    await web.TCPSite(runner, '0.0.0.0', port).start()
-    logging.info(f"Web server bound to port {port}")
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Web server port {port} da ishga tushdi.")
 
 async def main():
+    # 1. Serverni ishga tushiramiz (Render uchun)
     await start_web_server()
+    # 2. Telegramdan eski xabarlarni tozalaymiz
     await bot.delete_webhook(drop_pending_updates=True)
+    # 3. Pollingni boshlaymiz
+    logging.info("Polling boshlandi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
