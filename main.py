@@ -6,7 +6,7 @@ import google.generativeai as genai
 from motor.motor_asyncio import AsyncIOMotorClient
 from langdetect import detect
 import edge_tts
-import speech_recognition as sr
+from aiohttp import web
 
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
@@ -33,15 +33,20 @@ class GeminiManager:
 gemini = GeminiManager(GEMINI_KEYS)
 
 SYSTEM_INSTRUCTION = (
-    "You are a truthful, objective assistant. Provide accurate information. "
-    "Do not guess or imagine facts. If you do not know, state that clearly. "
-    "Maintain a professional, conversational tone. Be concise. "
-    "Respond in the same language the user uses."
+    "Sen — loʻnda va aniq javob beradigan oʻzbek AI yordamchisan.
+
+QOIDALAR:
+- Til: faqat oʻzbek (lotin). Rus/ingliz/krill aralashsa — toʻgʻrilab yoz.
+- Uzunlik: 1-4 gap. Kerak boʻlsa roʻyxat yoki table.
+- Uslub: birinchi gapda mohiyat. Suv, "hozir…", "keling…" larsiz.
+- Bilmasang — "Buni bilmayman" deb ayt. Uydirma yoʻq.
+- Foydalanuvchi tarixidan kelib chiq, lekin takrorlama.
+- Har bir javobda yangi narsa bor. Format — oddiy matn.
+"
 )
 
 # --- UTILS ---
 async def text_to_speech(text, lang_code):
-    # Mapping to edge-tts voices
     voices = {"uz": "uz-UZ-MadinaNeural", "en": "en-US-JennyNeural", 
               "ru": "ru-RU-SvetlanaNeural", "tr": "tr-TR-AhmetNeural", "ar": "ar-SA-ZariyahNeural"}
     voice = voices.get(lang_code, "en-US-JennyNeural")
@@ -62,40 +67,18 @@ async def cmd_help(msg: Message):
 @dp.message(Command("admin_logs"))
 async def admin_logs(msg: Message):
     if msg.from_user.id != ADMIN_ID: return
-    logs = history_col.find().sort("_id", -1).limit(5)
-    async for log in logs:
-        await msg.answer(f"User: {log['user_id']}\nQ: {log['question']}\nA: {log['content']}")
-
-# --- CORE LOGIC - PINNED ---
-@dp.message(Command("admin_logs"))
-async def admin_logs(msg: Message):
-    if msg.from_user.id != ADMIN_ID: return
-    # Fetch last 10 interactions for analysis
     cursor = history_col.find().sort("_id", -1).limit(10)
     async for doc in cursor:
         await msg.answer(f"👤 User: {doc['user_id']}\n💬 Q: {doc.get('question')}\n🤖 A: {doc.get('content')}")
 
-@dp.message(F.voice)
-async def handle_voice(msg: Message):
-    # Downloads voice, transcribes to text via Whisper, sends to Gemini
-    # This fulfills requirement #3 & #8
-    file = await bot.get_file(msg.voice.file_id)
-    await bot.download_file(file.file_path, "input.ogg")
-    
-    # Transcription logic (Whisper)
-    text = await transcribe_audio("input.ogg")
-    msg.text = text
-    await chat(msg)
 @dp.message(F.text)
 async def chat(msg: Message):
     try: lang = detect(msg.text)
     except: lang = "en"
-    
     await bot.send_chat_action(msg.chat.id, "typing")
     try:
         res = gemini.model.generate_content(f"{SYSTEM_INSTRUCTION}\n\nUser: {msg.text}")
         await history_col.insert_one({"user_id": msg.chat.id, "question": msg.text, "content": res.text})
-        
         audio = await text_to_speech(res.text, lang)
         await msg.reply_voice(voice=FSInputFile(audio))
         await msg.reply(res.text)
@@ -105,5 +88,20 @@ async def chat(msg: Message):
             await msg.reply("Limit reached. Retrying...")
         else: await msg.reply("Error occurred.")
 
+# --- WEB SERVER & MAIN ---
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", lambda r: web.Response(text="Bot is running!"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    await web.TCPSite(runner, '0.0.0.0', port).start()
+    logging.info(f"Web server bound to port {port}")
+
+async def main():
+    await start_web_server()
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
-    asyncio.run(dp.start_polling(bot))
+    asyncio.run(main())
