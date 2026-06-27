@@ -22,7 +22,8 @@ history_col = db["history"]
 
 # --- GEMINI MANAGER ---
 class GeminiManager:
-    def init(self, api_keys: list[str]):
+    def __init__(self, api_keys: list[str]):
+
         self.keys = itertools.cycle(api_keys)
         self.current_key = next(self.keys)
         self._configure()
