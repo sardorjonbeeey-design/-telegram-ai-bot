@@ -111,12 +111,17 @@ app = web.Application()
 app.router.add_get("/", handle_root)  # Render uchun javob
 app.router.add_post("/webhook", webhook_handler) # Telegram uchun webhook
 
+from aiogram import types
+
 async def webhook_handler(request):
-    url = str(request.url)
-    index = url.rfind("/")
-    token = url[index+1:]
-    if token != TOKEN:
-        return web.Response(status=403)
+    try:
+        data = await request.json()
+        update = types.Update(**data)
+        await dp.feed_webhook(bot, update)
+        return web.Response(text="OK")
+    except Exception as e:
+        logging.error(f"Xatolik: {e}")
+        return web.Response(status=200) # Telegram qayta urinmasligi uchun 200 qaytaring
     
     data = await request.json()
     update = types.Update(**data)
