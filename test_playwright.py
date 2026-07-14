@@ -1,11 +1,13 @@
 import os
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
 import asyncio
 from playwright.async_api import async_playwright
 
 
 async def main():
     async with async_playwright() as p:
+
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -15,7 +17,15 @@ async def main():
             ],
         )
 
-        page = await browser.new_page()
+        page = await browser.new_page(
+            viewport={"width": 1280, "height": 720},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
+        )
 
         print("Opening OLX...")
 
@@ -43,4 +53,5 @@ async def main():
         await browser.close()
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
