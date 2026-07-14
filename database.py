@@ -24,9 +24,16 @@ async def init_db():
             description TEXT,
             location TEXT,
             photos TEXT,
+            contact TEXT,
             created_at TEXT
         )
         """)
+
+        # Backfill contact column for databases created before this field existed
+        try:
+            await db.execute("ALTER TABLE listings ADD COLUMN contact TEXT")
+        except Exception:
+            pass
 
         await db.commit()
 
@@ -55,7 +62,8 @@ async def save_listing(
     product: str,
     description: str,
     location: str,
-    photos: str
+    photos: str,
+    contact: str = ""
 ):
 
     async with aiosqlite.connect(DB_NAME) as db:
@@ -69,9 +77,10 @@ async def save_listing(
                 description,
                 location,
                 photos,
+                contact,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 telegram_id,
@@ -79,8 +88,29 @@ async def save_listing(
                 description,
                 location,
                 photos,
+                contact,
                 datetime.now().isoformat()
             )
         )
 
         await db.commit()
+
+
+async def search_listings(product: str, limit: int = 5):
+    async with aiosqlite.connect(DB_NAME) as db:
+        db.row_factory = aiosqlite.Row
+
+        cursor = await db.execute(
+            """
+            SELECT product, description, location, contact, created_at
+            FROM listings
+            WHERE product LIKE ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (f"%{product}%", limit)
+        )
+
+        rows = await cursor.fetchall()
+
+        return [dict(row) for row in rows]
