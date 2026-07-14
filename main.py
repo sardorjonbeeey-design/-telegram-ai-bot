@@ -1,129 +1,189 @@
-import os, asyncio, logging, itertools, uuid
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command
-from aiogram.types import Message, FSInputFile
-from aiohttp import web
-from motor.motor_asyncio import AsyncIOMotorClient
-import google.generativeai as genai
-from langdetect import detect
-import edge_tts
+import asyncio
+import logging
 
-# --- CONFIGURATION ---
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
+from aiogram.types import Message, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
+from config import BOT_TOKEN
+from database import init_db, add_user, save_listing
+from gemini import parse_message
+from keyboards import location_keyboard
+
 logging.basicConfig(level=logging.INFO)
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
-MONGODB_URI = os.environ.get("MONGODB_URI")
-GEMINI_KEYS = os.environ.get("GEMINI_KEYS", "").split(",")
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
-db = AsyncIOMotorClient(MONGODB_URI)["qadam_db"]
-history_col = db["history"]
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
 
-UZ_SYSTEM = "Sen lo'nda va aniq javob beradigan o'zbek AI yordamchisan. QOIDALAR: Til faqat o'zbek (lotin). 1-4 gap. Birinchi gapda mohiyat. Bilmasang 'Buni bilmayman' de. Uydirma yo'q."
-EN_SYSTEM = "You are a concise Uzbek AI assistant. RULES: Reply in Uzbek (Latin) unless user writes English. 1-4 sentences. First sentence = answer. If unknown, say 'Buni bilmayman'."
 
-VOICE_MAP = {"uz": "uz-UZ-MadinaNeural", "en": "en-US-JennyNeural", "ru": "ru-RU-SvetlanaNeural", "tr": "tr-TR-AhmetNeural"}
+class UserState(StatesGroup):
+    waiting_location = State()
+    waiting_description = State()
 
-# --- GEMINI MANAGER ---
-class GeminiManager:
-    def __init__(self, api_keys: list[str]):
-        self.keys = itertools.cycle(api_keys)
-        self.current_key = next(self.keys)
-        genai.configure(api_key=self.current_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
 
-    def _rotate(self):
-        self.current_key = next(self.keys)
-        genai.configure(api_key=self.current_key)
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
-        logging.info(f"Rotated key: {self.current_key[:8]}...")
+@dp.message(CommandStart())
+async def start(message: Message):
+    await add_user(message.from_user.id)
 
-    async def generate(self, prompt: str) -> str:
-        for _ in range(3):
-            try:
-                resp = await self.model.generate_content_async(prompt)
-                return resp.text.strip()
-            except Exception as e:
-                if "429" in str(e):
-                    self._rotate()
-                    await asyncio.sleep(1)
-                else: raise e
-        raise Exception("All keys exhausted")
+    await message.answer(
+        "👋 Assalomu alaykum!\n\n"
+        "Nima qidiryapsiz yoki nima sotmoqchisiz?\n\n"
+        "Misollar:\n"
+        "• iPhone 15 kerak\n"
+        "• Samsung sotaman\n\n"
+        "🇷🇺 Можно писать и на русском."
+    )
 
-gemini = GeminiManager(GEMINI_KEYS)
 
-# --- HANDLERS ---
-@dp.message(Command("start"))
-async def cmd_start(msg: Message):
-    await msg.answer("Salom! Men oʻzbek AI yordamchiman. Savol yozing.")
+@dp.message()
+async def handle_message(message: Message, state: FSMContext):
+    text = message.text or ""
 
-@dp.message(Command("clear"))
-async def cmd_clear(msg: Message):
-    await history_col.delete_one({"_id": str(msg.from_user.id)})
-    await msg.answer("Xotira tozalandi.")
+    data = await parse_message(text)
 
-@dp.message(Command("stats"))
-async def cmd_stats(msg: Message):
-    if msg.from_user.id == ADMIN_ID:
-        total = await history_col.count_documents({})
-        await msg.answer(f"Foydalanuvchilar: {total}")
+    intent = data["intent"]
+    product = data["product"]
+    language = data["language"]
 
-@dp.message(F.text & ~F.command)
-async def handle_msg(msg: Message):
-    text = msg.text.strip()
-    try: lang = "en" if "en" in detect(text) else "uz"
-    except: lang = "uz"
-    
-    prompt = f"{EN_SYSTEM if lang == 'en' else UZ_SYSTEM}\n\nUser: {text}"
-    wait_msg = await msg.answer("⏳")
-    
-    try:
-        reply = await gemini.generate(prompt)
-        await history_col.update_one(
-            {"_id": str(msg.from_user.id)},
-            {"$push": {"messages": {"$each": [{"role": "user", "content": text}, {"role": "assistant", "content": reply}]}, "$slice": -20}},
-            upsert=True
+    if intent == "unknown":
+        if language == "ru":
+            await message.answer(
+                "Я не понял.\n\n"
+                "Например:\n"
+                "• Куплю iPhone 15\n"
+                "• Продам Samsung"
+            )
+        else:
+            await message.answer(
+                "Tushunmadim.\n\n"
+                "Masalan:\n"
+                "• iPhone 15 kerak\n"
+                "• Samsung sotaman"
+            )
+        return
+
+    await state.update_data(
+        intent=intent,
+        product=product,
+        language=language
+    )
+
+    if language == "ru":
+        text = "📍 Выберите город:"
+    else:
+        text = "📍 Joylashuvni tanlang:"
+
+    await message.answer(
+        text,
+        reply_markup=location_keyboard(language)
+    )
+
+    await state.set_state(UserState.waiting_location)
+    from olx import search_listings
+
+
+@dp.callback_query(
+    UserState.waiting_location,
+    F.data.startswith("loc:")
+)
+async def location_selected(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+    location = callback.data.split(":", 1)[1]
+
+    data = await state.get_data()
+
+    intent = data["intent"]
+    product = data["product"]
+    language = data["language"]
+
+    await state.update_data(location=location)
+
+    await callback.answer()
+
+    if intent == "buy":
+        if language == "ru":
+            await callback.message.edit_text("🔎 Ищу объявления...")
+        else:
+            await callback.message.edit_text("🔎 E'lonlar qidirilmoqda...")
+
+        listings = await search_listings(product, location)
+
+        if not listings:
+            if language == "ru":
+                await callback.message.answer(
+                    "😔 Ничего не найдено."
+                )
+            else:
+                await callback.message.answer(
+                    "😔 Hech narsa topilmadi."
+                )
+
+            await state.clear()
+            return
+
+        for item in listings:
+            text = (
+                f"📦 {item['title']}\n\n"
+                f"💰 {item['price']}\n"
+                f"📍 {item['location']}\n\n"
+                f"{item['url']}"
+            )
+
+            await callback.message.answer(text)
+
+        await state.clear()
+        return
+
+    if language == "ru":
+        await callback.message.answer(
+            "📝 Отправьте описание товара одним сообщением."
+        )
+    else:
+        await callback.message.answer(
+            "📝 Mahsulot tavsifini bitta xabarda yuboring."
         )
 
-        name = f"voice_{uuid.uuid4().hex[:8]}.mp3"
-        comm = edge_tts.Communicate(reply, VOICE_MAP.get(lang, "uz-UZ-MadinaNeural"))
-        await comm.save(name)
-        
-        await msg.answer_voice(voice=FSInputFile(name), caption=reply)
-        await wait_msg.delete()
-        if os.path.exists(name): os.remove(name)
-    except Exception as e:
-        await wait_msg.edit_text("Xatolik yuz berdi.")
-        logging.error(f"Error: {e}")
+    await state.set_state(UserState.waiting_description)
+    
+@dp.message(UserState.waiting_description)
+async def save_description(message: Message, state: FSMContext):
+    data = await state.get_data()
 
-# --- WEBHOOK & MAIN ---
-async def webhook_handler(request):
-    try:
-        data = await request.json()
-        await dp.feed_webhook(bot, types.Update(**data))
-        return web.Response(text="OK")
-    except Exception as e:
-        logging.error(f"Webhook error: {e}")
-        return web.Response(status=200)
+    telegram_id = message.from_user.id
+    product = data["product"]
+    location = data["location"]
+    language = data["language"]
+    description = message.text or ""
 
-async def handle_root(request):
-    return web.Response(text="Bot is running!")
+    await save_listing(
+        telegram_id=telegram_id,
+        product=product,
+        description=description,
+        location=location,
+        photos=""
+    )
+
+    if language == "ru":
+        await message.answer(
+            "✅ Ваше объявление успешно сохранено!"
+        )
+    else:
+        await message.answer(
+            "✅ E'loningiz muvaffaqiyatli saqlandi!"
+        )
+
+    await state.clear()
+
 
 async def main():
-    port = int(os.environ.get("PORT", 8080))
-    app = web.Application()
-    app.router.add_get("/", handle_root)
-    app.router.add_post("/webhook", webhook_handler)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    
-    external_url = os.environ.get("RENDER_EXTERNAL_URL")
-    await bot.set_webhook(f"{external_url}/webhook")
-    await asyncio.Event().wait()
+    await init_db()
+    await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
