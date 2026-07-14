@@ -50,7 +50,7 @@ Rules:
 - If intent is unclear use "unknown".
 """
 
-MODEL = "gemini-2.5-flash-lite"
+MODEL = "gemini-3.1-flash-lite"
 
 
 async def parse_message(text: str) -> dict:
