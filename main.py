@@ -121,7 +121,7 @@ async def location_selected(
 
     await callback.answer()
 
-        if intent == "buy":
+    if intent == "buy":
 
         if language == "ru":
             await callback.message.edit_text(
@@ -134,11 +134,23 @@ async def location_selected(
 
         print("CALLING OLX SEARCH FOR:", product)
 
-        listings = await search_olx(product)
+        try:
+            listings = await search_olx(product)
 
-        print("BOT GOT RESULTS:", listings)
+            print("BOT GOT RESULTS:", listings)
+
+        except Exception as e:
+            print("OLX SEARCH ERROR:", e)
+
+            await callback.message.answer(
+                "❌ Qidirishda xatolik yuz berdi."
+            )
+
+            await state.clear()
+            return
 
         if not listings:
+
             if language == "ru":
                 await callback.message.answer(
                     "😔 Ничего не найдено."
@@ -152,6 +164,7 @@ async def location_selected(
             return
 
         for item in listings:
+
             text = (
                 f"📦 {item['title']}\n\n"
                 f"💰 {item['price']}\n"
@@ -166,11 +179,15 @@ async def location_selected(
 
 
     # Sell flow
+
     if language == "ru":
+
         await callback.message.answer(
             "📝 Отправьте описание товара одним сообщением."
         )
+
     else:
+
         await callback.message.answer(
             "📝 Mahsulot tavsifini bitta xabarda yuboring."
         )
@@ -178,7 +195,6 @@ async def location_selected(
     await state.set_state(
         UserState.waiting_description
     )
-
 
 @dp.message(UserState.waiting_description)
 async def save_description(
