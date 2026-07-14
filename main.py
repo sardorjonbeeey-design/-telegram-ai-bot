@@ -52,24 +52,35 @@ async def handle_message(message: Message, state: FSMContext):
     product = data["product"]
     language = data["language"]
 
+    # Normal conversation
     if intent == "chat":
         if language == "ru":
             await message.answer(
-                    "👋 Здравствуйте!\n\n"
-                    "Я помогу найти или разместить товар.\n\n"
-                    "Например:\n"
-                    "• Куплю iPhone 15\n"
-                    "• Продам Samsung"
-                )
-            else:
+                "👋 Здравствуйте!\n\n"
+                "Я помогу найти или разместить товар.\n\n"
+                "Например:\n"
+                "• Куплю iPhone 15\n"
+                "• Продам Samsung"
+            )
+        else:
             await message.answer(
-                    "👋 Salom!\n\n"
-                    "Men sizga mahsulot topish yoki sotishda yordam beraman.\n\n"
-                    "Masalan:\n"
-                    "• iPhone 15 kerak\n"
-                    "• Samsung sotaman"
-                )
-            return
+                "👋 Salom!\n\n"
+                "Men sizga mahsulot topish yoki sotishda yordam beraman.\n\n"
+                "Masalan:\n"
+                "• iPhone 15 kerak\n"
+                "• Samsung sotaman"
+            )
+        return
+
+    # Safety check
+    if intent not in ["buy", "sell"]:
+        await message.answer(
+            "Iltimos, mahsulot haqida yozing.\n\n"
+            "Masalan:\n"
+            "• iPhone 15 kerak\n"
+            "• Telefon sotaman"
+        )
+        return
 
     await state.update_data(
         intent=intent,
@@ -88,7 +99,6 @@ async def handle_message(message: Message, state: FSMContext):
     )
 
     await state.set_state(UserState.waiting_location)
-    
 
 
 @dp.callback_query(
@@ -112,10 +122,15 @@ async def location_selected(
     await callback.answer()
 
     if intent == "buy":
+
         if language == "ru":
-            await callback.message.edit_text("🔎 Ищу объявления...")
+            await callback.message.edit_text(
+                "🔎 Ищу объявления..."
+            )
         else:
-            await callback.message.edit_text("🔎 E'lonlar qidirilmoqda...")
+            await callback.message.edit_text(
+                "🔎 E'lonlar qidirilmoqda..."
+            )
 
         listings = await search_olx(product)
 
@@ -145,6 +160,8 @@ async def location_selected(
         await state.clear()
         return
 
+
+    # Sell flow
     if language == "ru":
         await callback.message.answer(
             "📝 Отправьте описание товара одним сообщением."
@@ -154,27 +171,27 @@ async def location_selected(
             "📝 Mahsulot tavsifini bitta xabarda yuboring."
         )
 
-    await state.set_state(UserState.waiting_description)
+    await state.set_state(
+        UserState.waiting_description
+    )
+
 
 @dp.message(UserState.waiting_description)
-async def save_description(message: Message, state: FSMContext):
+async def save_description(
+    message: Message,
+    state: FSMContext
+):
     data = await state.get_data()
 
-    telegram_id = message.from_user.id
-    product = data["product"]
-    location = data["location"]
-    language = data["language"]
-    description = message.text or ""
-
     await save_listing(
-        telegram_id=telegram_id,
-        product=product,
-        description=description,
-        location=location,
+        telegram_id=message.from_user.id,
+        product=data["product"],
+        description=message.text or "",
+        location=data["location"],
         photos=""
     )
 
-    if language == "ru":
+    if data["language"] == "ru":
         await message.answer(
             "✅ Ваше объявление успешно сохранено!"
         )
@@ -186,26 +203,39 @@ async def save_description(message: Message, state: FSMContext):
     await state.clear()
 
 
-# --- Health server so Render detects an open port ---
 async def health(request):
     return web.Response(text="OK")
 
 
 async def start_health_server():
     app = web.Application()
+
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
+
     runner = web.AppRunner(app)
     await runner.setup()
+
     port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
+
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        port
+    )
+
     await site.start()
-    logging.info(f"Health server running on port {port}")
+
+    logging.info(
+        f"Health server running on port {port}"
+    )
 
 
 async def main():
     await init_db()
+
     await start_health_server()
+
     await dp.start_polling(bot)
 
 
