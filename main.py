@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import os
+
+from aiohttp import web
 
 from olx import search_olx
 from aiogram import Bot, Dispatcher, F
@@ -150,7 +153,7 @@ async def location_selected(
         )
 
     await state.set_state(UserState.waiting_description)
-    
+
 @dp.message(UserState.waiting_description)
 async def save_description(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -181,8 +184,26 @@ async def save_description(message: Message, state: FSMContext):
     await state.clear()
 
 
+# --- Health server so Render detects an open port ---
+async def health(request):
+    return web.Response(text="OK")
+
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Health server running on port {port}")
+
+
 async def main():
     await init_db()
+    await start_health_server()
     await dp.start_polling(bot)
 
 
