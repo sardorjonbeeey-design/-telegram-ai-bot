@@ -3,24 +3,37 @@ from bs4 import BeautifulSoup
 
 
 async def search_olx(product):
+    print("=" * 50)
+    print("SEARCH_OLX CALLED:", product)
+
     query = product.replace(" ", "-")
     url = f"https://www.olx.uz/oz/q-{query}/"
 
+    print("URL:", url)
+
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/137.0.0.0 Safari/537.36"
+        )
     }
 
     async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(url) as response:
             html = await response.text()
+
             print("STATUS:", response.status)
+            print("HTML (first 500 chars):")
             print(html[:500])
+            print("=" * 50)
 
     soup = BeautifulSoup(html, "html.parser")
 
     results = []
 
     cards = soup.select('[data-cy="l-card"]')
+    print("CARDS FOUND:", len(cards))
 
     for card in cards:
         link_tag = card.find("a", href=True)
@@ -32,13 +45,25 @@ async def search_olx(product):
             href = "https://www.olx.uz" + href
 
         title_tag = card.find(["h4", "h6"])
-        title = title_tag.get_text(" ", strip=True) if title_tag else link_tag.get_text(" ", strip=True)
+        title = (
+            title_tag.get_text(" ", strip=True)
+            if title_tag
+            else link_tag.get_text(" ", strip=True)
+        )
 
         price_tag = card.select_one('[data-testid="ad-price"]')
-        price = price_tag.get_text(" ", strip=True) if price_tag else "Narx ko'rsatilmagan"
+        price = (
+            price_tag.get_text(" ", strip=True)
+            if price_tag
+            else "Narx ko'rsatilmagan"
+        )
 
         location_tag = card.select_one('[data-testid="location-date"]')
-        location = location_tag.get_text(" ", strip=True) if location_tag else ""
+        location = (
+            location_tag.get_text(" ", strip=True)
+            if location_tag
+            else ""
+        )
 
         if len(title) > 5:
             results.append({
@@ -47,5 +72,7 @@ async def search_olx(product):
                 "location": location,
                 "url": href
             })
+
+    print("RESULTS FOUND:", len(results))
 
     return results[:5]
