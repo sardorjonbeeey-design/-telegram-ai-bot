@@ -24,6 +24,8 @@ async def search_olx(product):
                 ]
             )
 
+            print("CHROMIUM STARTED")
+
             page = await browser.new_page(
                 viewport={
                     "width": 1280,
@@ -42,9 +44,16 @@ async def search_olx(product):
                 timeout=60000
             )
 
+            print("PAGE LOADED")
+            print("CURRENT URL:", page.url)
             print("PAGE TITLE:", await page.title())
 
             await page.wait_for_timeout(3000)
+
+            html = await page.content()
+
+            print("HTML LENGTH:", len(html))
+            print("HTML PREVIEW:", html[:300])
 
             cards = await page.query_selector_all(
                 '[data-cy="l-card"]'
@@ -55,25 +64,21 @@ async def search_olx(product):
 
             for card in cards[:5]:
 
-                title_el = await card.query_selector(
-                    "h6"
-                )
+                title_el = await card.query_selector("h6")
 
-                title = (
-                    await title_el.inner_text()
-                    if title_el
-                    else "No title"
-                )
+                if title_el:
+                    title = await title_el.inner_text()
+                else:
+                    title = "No title"
 
-                link_el = await card.query_selector(
-                    "a"
-                )
 
-                href = (
-                    await link_el.get_attribute("href")
-                    if link_el
-                    else None
-                )
+                link_el = await card.query_selector("a")
+
+                if link_el:
+                    href = await link_el.get_attribute("href")
+                else:
+                    href = None
+
 
                 if href and href.startswith("/"):
                     href = "https://www.olx.uz" + href
@@ -90,13 +95,13 @@ async def search_olx(product):
             await browser.close()
 
 
-        print("RESULTS:", results)
+        print("FINAL RESULTS:", results)
 
         return results
 
 
     except Exception as e:
 
-        print("PLAYWRIGHT ERROR:", e)
+        print("PLAYWRIGHT ERROR:", repr(e))
 
         return []
