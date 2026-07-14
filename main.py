@@ -5,6 +5,9 @@ import os
 from aiohttp import web
 
 from olx import search_olx
+import olx
+
+print("🔥 IMPORTED OLX FROM:", olx.__file__)
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
