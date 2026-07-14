@@ -121,7 +121,7 @@ async def location_selected(
 
     await callback.answer()
 
-    if intent == "buy":
+        if intent == "buy":
 
         if language == "ru":
             await callback.message.edit_text(
@@ -132,7 +132,11 @@ async def location_selected(
                 "🔎 E'lonlar qidirilmoqda..."
             )
 
+        print("CALLING OLX SEARCH FOR:", product)
+
         listings = await search_olx(product)
+
+        print("BOT GOT RESULTS:", listings)
 
         if not listings:
             if language == "ru":
