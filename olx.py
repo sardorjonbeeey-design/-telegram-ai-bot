@@ -1,63 +1,93 @@
-import aiohttp
-from bs4 import BeautifulSoup
-import asyncio
+from playwright.async_api import async_playwright
 
 
 async def search_olx(product):
+
     print("=" * 50)
-    print("SEARCH START:", product)
+    print("PLAYWRIGHT OLX SEARCH:", product)
 
     query = product.replace(" ", "-")
     url = f"https://www.olx.uz/oz/q-{query}/"
 
     print("URL:", url)
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 Chrome/137 Safari/537.36"
-        ),
-        "Accept-Language": "uz-UZ,uz;q=0.9"
-    }
+    results = []
 
     try:
-        async with aiohttp.ClientSession(headers=headers) as session:
+        async with async_playwright() as p:
 
-            async with session.get(url, timeout=30) as response:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage"
+                ]
+            )
 
-                print("STATUS:", response.status)
+            page = await browser.new_page(
+                viewport={
+                    "width": 1280,
+                    "height": 900
+                },
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 "
+                    "Chrome/137 Safari/537.36"
+                )
+            )
 
-                html = await response.text()
+            await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=60000
+            )
 
-                print("HTML SIZE:", len(html))
-                print(html[:300])
+            print("PAGE TITLE:", await page.title())
+
+            await page.wait_for_timeout(3000)
+
+            cards = await page.query_selector_all(
+                '[data-cy="l-card"]'
+            )
+
+            print("CARDS FOUND:", len(cards))
 
 
-        soup = BeautifulSoup(html, "html.parser")
+            for card in cards[:5]:
 
-        cards = soup.select('[data-cy="l-card"]')
+                title_el = await card.query_selector(
+                    "h6"
+                )
 
-        print("CARDS:", len(cards))
+                title = (
+                    await title_el.inner_text()
+                    if title_el
+                    else "No title"
+                )
 
+                link_el = await card.query_selector(
+                    "a"
+                )
 
-        results = []
+                href = (
+                    await link_el.get_attribute("href")
+                    if link_el
+                    else None
+                )
 
-        for card in cards[:5]:
-
-            title = card.get_text(" ", strip=True)
-
-            link = card.find("a", href=True)
-
-            if link:
-                href = link["href"]
-
-                if href.startswith("/"):
+                if href and href.startswith("/"):
                     href = "https://www.olx.uz" + href
 
+
                 results.append({
-                    "title": title[:100],
+                    "title": title,
+                    "price": "N/A",
+                    "location": "OLX",
                     "url": href
                 })
+
+
+            await browser.close()
 
 
         print("RESULTS:", results)
@@ -66,5 +96,7 @@ async def search_olx(product):
 
 
     except Exception as e:
-        print("OLX ERROR:", e)
+
+        print("PLAYWRIGHT ERROR:", e)
+
         return []
