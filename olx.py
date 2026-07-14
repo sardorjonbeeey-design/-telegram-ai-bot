@@ -13,6 +13,8 @@ async def search_olx(product):
     async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(url) as response:
             html = await response.text()
+            print("STATUS:", response.status)
+            print(html[:500])
 
     soup = BeautifulSoup(html, "html.parser")
 
