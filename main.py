@@ -86,7 +86,7 @@ async def handle_message(message: Message, state: FSMContext):
     )
 
     await state.set_state(UserState.waiting_location)
-    from olx import search_listings
+    
 
 
 @dp.callback_query(
