@@ -112,7 +112,7 @@ async def location_selected(
         else:
             await callback.message.edit_text("🔎 E'lonlar qidirilmoqda...")
 
-        listings = await search_listings(product, location)
+        listings = await search_olx(product)
 
         if not listings:
             if language == "ru":
