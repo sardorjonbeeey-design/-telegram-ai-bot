@@ -14,8 +14,7 @@ async def search_listings(product: str, location: str):
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/137.0 Safari/537.36"
+            "AppleWebKit/537.36 Chrome/120 Safari/537.36"
         )
     }
 
@@ -23,7 +22,8 @@ async def search_listings(product: str, location: str):
 
     try:
         async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url, timeout=20) as response:
+            async with session.get(url, timeout=15) as response:
+
                 if response.status != 200:
                     return []
 
@@ -34,49 +34,65 @@ async def search_listings(product: str, location: str):
         cards = soup.select("div[data-cy='l-card']")
 
         for card in cards[:10]:
-            try:
-                title = card.select_one("h4").get_text(strip=True)
 
-                price_tag = card.select_one("p[data-testid='ad-price']")
+            try:
+                title_element = card.select_one("h4")
+
+                if not title_element:
+                    continue
+
+                title = title_element.get_text(strip=True)
+
+
+                price_element = card.select_one(
+                    "p[data-testid='ad-price']"
+                )
+
                 price = (
-                    price_tag.get_text(strip=True)
-                    if price_tag
+                    price_element.get_text(strip=True)
+                    if price_element
                     else "Narx ko'rsatilmagan"
                 )
 
-                location_tag = card.select_one("p[data-testid='location-date']")
-                place = (
-                    location_tag.get_text(" ", strip=True)
-                    if location_tag
+
+                location_element = card.select_one(
+                    "p[data-testid='location-date']"
+                )
+
+                item_location = (
+                    location_element.get_text(" ", strip=True)
+                    if location_element
                     else location
                 )
 
-                link = card.find("a", href=True)
 
-                if link:
-                    href = link["href"]
+                link_element = card.find("a", href=True)
 
-                    if href.startswith("/"):
-                        href = BASE_URL + href
-                else:
-                    href = ""
+                link = ""
 
-                if location.lower() not in place.lower():
-                    continue
+                if link_element:
+                    link = link_element["href"]
+
+                    if link.startswith("/"):
+                        link = BASE_URL + link
+
 
                 results.append(
                     {
                         "title": title,
                         "price": price,
-                        "location": place,
-                        "url": href,
+                        "location": item_location,
+                        "url": link
                     }
                 )
+
 
             except Exception:
                 continue
 
+
     except Exception:
         return []
+
 
     return results
