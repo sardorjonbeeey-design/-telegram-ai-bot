@@ -52,9 +52,9 @@ async def handle_message(message: Message, state: FSMContext):
     product = data["product"]
     language = data["language"]
 
-        if intent == "chat":
-            if language == "ru":
-                await message.answer(
+    if intent == "chat":
+        if language == "ru":
+            await message.answer(
                     "👋 Здравствуйте!\n\n"
                     "Я помогу найти или разместить товар.\n\n"
                     "Например:\n"
@@ -62,7 +62,7 @@ async def handle_message(message: Message, state: FSMContext):
                     "• Продам Samsung"
                 )
             else:
-                await message.answer(
+            await message.answer(
                     "👋 Salom!\n\n"
                     "Men sizga mahsulot topish yoki sotishda yordam beraman.\n\n"
                     "Masalan:\n"
