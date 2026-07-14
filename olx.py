@@ -1,5 +1,7 @@
-import aiohttp
-from bs4 import BeautifulSoup
+import os
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
+from playwright.async_api import async_playwright
 
 
 async def search_olx(product):
@@ -11,68 +13,105 @@ async def search_olx(product):
 
     print("URL:", url)
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/137.0.0.0 Safari/537.36"
-        )
-    }
-
-    async with aiohttp.ClientSession(headers=headers) as session:
-        async with session.get(url) as response:
-            html = await response.text()
-
-            print("STATUS:", response.status)
-            print("HTML (first 500 chars):")
-            print(html[:500])
-            print("=" * 50)
-
-    soup = BeautifulSoup(html, "html.parser")
-
     results = []
 
-    cards = soup.select('[data-cy="l-card"]')
-    print("CARDS FOUND:", len(cards))
+    async with async_playwright() as p:
 
-    for card in cards:
-        link_tag = card.find("a", href=True)
-        if not link_tag:
-            continue
-
-        href = link_tag["href"]
-        if not href.startswith("http"):
-            href = "https://www.olx.uz" + href
-
-        title_tag = card.find(["h4", "h6"])
-        title = (
-            title_tag.get_text(" ", strip=True)
-            if title_tag
-            else link_tag.get_text(" ", strip=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+            ],
         )
 
-        price_tag = card.select_one('[data-testid="ad-price"]')
-        price = (
-            price_tag.get_text(" ", strip=True)
-            if price_tag
-            else "Narx ko'rsatilmagan"
+        page = await browser.new_page(
+            viewport={"width": 1280, "height": 720},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
         )
 
-        location_tag = card.select_one('[data-testid="location-date"]')
-        location = (
-            location_tag.get_text(" ", strip=True)
-            if location_tag
-            else ""
-        )
+        try:
+            print("Opening OLX...")
 
-        if len(title) > 5:
-            results.append({
-                "title": title[:80],
-                "price": price,
-                "location": location,
-                "url": href
-            })
+            response = await page.goto(
+                url,
+                wait_until="networkidle",
+                timeout=60000,
+            )
+
+            print("STATUS:", response.status if response else None)
+            print("TITLE:", await page.title())
+
+            # Wait for listings
+            await page.wait_for_selector(
+                '[data-cy="l-card"]',
+                timeout=15000
+            )
+
+            cards = await page.query_selector_all(
+                '[data-cy="l-card"]'
+            )
+
+            print("CARDS FOUND:", len(cards))
+
+            for card in cards[:5]:
+
+                try:
+                    link = await card.query_selector("a[href]")
+                    if not link:
+                        continue
+
+                    href = await link.get_attribute("href")
+
+                    if href and not href.startswith("http"):
+                        href = "https://www.olx.uz" + href
+
+                    title = await link.inner_text()
+
+                    price_element = await card.query_selector(
+                        '[data-testid="ad-price"]'
+                    )
+
+                    price = (
+                        await price_element.inner_text()
+                        if price_element
+                        else "Narx ko'rsatilmagan"
+                    )
+
+                    location_element = await card.query_selector(
+                        '[data-testid="location-date"]'
+                    )
+
+                    location = (
+                        await location_element.inner_text()
+                        if location_element
+                        else ""
+                    )
+
+                    results.append({
+                        "title": title.strip()[:80],
+                        "price": price.strip(),
+                        "location": location.strip(),
+                        "url": href
+                    })
+
+                except Exception as e:
+                    print("CARD ERROR:", e)
+
+        except Exception as e:
+            print("OLX ERROR:", e)
+
+        finally:
+            await browser.close()
+
 
     print("RESULTS FOUND:", len(results))
+    print(results)
 
     return results[:5]
