@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from olx import search_olx
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
